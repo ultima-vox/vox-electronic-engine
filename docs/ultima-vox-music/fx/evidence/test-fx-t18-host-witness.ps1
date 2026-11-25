@@ -19,6 +19,20 @@ if ($parseErrors.Count -ne 0) {
     throw "Host witness PowerShell parser rejected the script: $($parseErrors -join '; ')"
 }
 $source = Get-Content -LiteralPath $witnessScript -Raw
+$parserScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'parse-fx-t18-etl.py')).Path
+$parserSource = Get-Content -LiteralPath $parserScript -Raw
+$diagnosticScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'diagnose-fx-t18-tracerpt-compatibility.ps1')).Path
+$diagnosticSource = Get-Content -LiteralPath $diagnosticScript -Raw
+if ($parserSource -notmatch 'EVENT_TRACE_PROVIDER_GUID' -or
+    $parserSource -notmatch 'validated EventTrace_Header' -or
+    $parserSource -notmatch 'summary_buffers_processed' -or
+    $parserSource -notmatch 'strict non-negative integer' -or
+    $parserSource -notmatch 'PLA_E_DCS_NOT_FOUND_UNSIGNED' -or
+    $diagnosticSource -notmatch "ErrorActionPreference\s*=\s*'Continue'" -or
+    $diagnosticSource -notmatch '0x80300002' -or
+    $diagnosticSource.IndexOf('Get-PostStopDiagnostics $postStopQuery $stop', [StringComparison]::Ordinal) -lt 0) {
+    throw 'Tracerpt XML header, whitespace-summary, exact HRESULT, or PS5.1 native-exit correction is incomplete'
+}
 $forbiddenTokens = @(
     ('Start' + '-Service'), ('Stop' + '-Service'), ('Restart' + '-Service'),
     ('Disable' + '-Service'), ('Set' + '-Service'), ('Stop' + '-Process'),

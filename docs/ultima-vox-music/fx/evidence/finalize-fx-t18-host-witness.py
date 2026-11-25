@@ -204,7 +204,10 @@ def finalize(
             except (OSError, ValueError) as error:
                 raise ValueError("retained tracerpt summary artifact is not parseable") from error
             for field in ("lost_events", "buffer_loss_events"):
-                if summary_metadata[field] != parse_receipt.get(field):
+                # The validated XML EventTrace_Header is authoritative for
+                # BuffersLost when tracerpt -summary omits that line. Never
+                # turn the missing summary field into an inferred zero.
+                if summary_metadata.get(field) is not None and summary_metadata[field] != parse_receipt.get(field):
                     raise ValueError("retained tracerpt summary counters do not reconcile to the parse receipt")
             for field in ("coverage_start_utc", "coverage_end_utc", "session_name"):
                 if summary_metadata[field] is not None and summary_metadata[field] != parse_receipt.get(field):
@@ -319,6 +322,7 @@ def finalize(
             "collector_parse_receipt_sha256": loss.get("collector_parse_receipt_sha256"),
             "tracerpt_summary_path": summary_path_text,
             "tracerpt_summary_sha256": summary_hash if isinstance(summary_hash, str) else "<fixture-summary>",
+            "eventtrace_header": parse_receipt.get("eventtrace_header"),
             "collection_metadata_path": collection_path_text,
             "collection_metadata_sha256": collection_hash if isinstance(collection_hash, str) else "<fixture-collection-metadata>",
             "collection_control_receipt_source": parser_provenance.get("collection_control_receipt_source") if isinstance(parser_provenance, dict) else "fixture-declared-metadata",

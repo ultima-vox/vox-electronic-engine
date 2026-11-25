@@ -728,12 +728,13 @@ def main() -> int:
         compatibility_xml = compatibility_dir / "compatibility.xml"
         compatibility_xml.write_text(
             """<Events xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\">
+  <Event><System><Provider Name=\"EventTrace\" Guid=\"{68FDD900-4A3E-11D1-84F4-0000F80464E3}\"/><EventID>0</EventID></System><EventData><Data Name=\"MaxFileSize\">16</Data><Data Name=\"LogFileMode\">0x0</Data><Data Name=\"BuffersWritten\">6</Data><Data Name=\"EventsLost\">0</Data><Data Name=\"BuffersLost\">0</Data></EventData></Event>
   <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>1</EventID><TimeCreated SystemTime=\"2026-11-25T10:00:01.0000000Z\"/></System><EventData><Data Name=\"ProcessId\">1234</Data><Data Name=\"ParentId\">100</Data><Data Name=\"ImageName\">timeout.exe</Data><Data Name=\"CreateTime\">2026-11-25T10:00:01.0000000Z</Data></EventData></Event>
   <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>2</EventID><TimeCreated SystemTime=\"2026-11-25T10:00:02.0000000Z\"/></System><EventData><Data Name=\"ProcessId\">1234</Data><Data Name=\"ParentId\">100</Data><Data Name=\"ImageName\">timeout.exe</Data><Data Name=\"CreateTime\">2026-11-25T10:00:01.0000000Z</Data></EventData></Event>
 </Events>""", encoding="utf-8")
         compatibility_summary = compatibility_dir / "compatibility-summary.txt"
         compatibility_summary.write_text(
-            "Events Lost: 0\nBuffers Lost: 0\n"
+            "Total Buffers Processed 6\nTotal Events Processed 11\nTotal Events  Lost      0\n"
             "Log Start Time: 2026-11-25T10:00:00.0000000Z\n"
             "Log End Time: 2026-11-25T10:00:03.0000000Z\n"
             "Logger Name: VOX-FX-T18-COMPAT\n", encoding="utf-8")
@@ -762,7 +763,11 @@ def main() -> int:
                 or diagnostic_value.get("controlled_process_binding_valid") is not True
                 or diagnostic_value.get("controlled_start_match_count") != 1
                 or diagnostic_value.get("controlled_stop_match_count") != 1
-                or diagnostic_value.get("qualification_prohibited") is not True):
+                or diagnostic_value.get("qualification_prohibited") is not True
+                or diagnostic_value.get("raw_etl_sha256") != hashlib.sha256(compatibility_raw.read_bytes()).hexdigest()
+                or diagnostic_value.get("eventtrace_header", {}).get("max_file_size_mb") != 16
+                or diagnostic_value.get("eventtrace_header", {}).get("log_file_mode") != 0
+                or diagnostic_value.get("eventtrace_header", {}).get("buffers_written") != 6):
             raise AssertionError(f"compatibility diagnostic fields/counters were not reconciled: {diagnostic_value}")
         names.append("tracerpt_compatibility_diagnostic_parser")
         mismatched_process = compatibility_dir / "mismatched-controlled-process.json"
@@ -881,12 +886,12 @@ def main() -> int:
             "etl_file_count=1", "file_policy=single_retained_etl_file_zero_rotation",
             "file_inventory_source=independent_etl_directory_inventory",
             "truncation_detected=false", f"etl_path={collection_etl}",
-            "stop_exit_code=0", "post_stop_query_exit_code=1", "tracerpt_probe_exit_code=0",
+            "stop_exit_code=0", "post_stop_query_exit_code=-2144337918", "tracerpt_probe_exit_code=0",
             f"command_stop=logman.exe stop {collection_session} -ets",
             f"command_post_stop_query=logman.exe query {collection_session} -ets",
             f"command_tracerpt_probe=tracerpt.exe {collection_etl} -summary summary.txt",
             "--- RAW LOGMAN OUTPUT ---", "[stop]", "The command completed successfully.",
-            "[post-stop-query]", "Data Collector Set was not found.",
+            "[post-stop-query]", "Ошибка: Набор программ сбора данных не найден.",
             "[tracerpt-summary-header]", f"Log End Time: {collection_stop_utc}",
             "[file-stat]", "Bytes Written: 35", "Rotation Count: 0",
             "ETL File Count: 1", "Truncation Detected: false", "[file-inventory]",
@@ -922,6 +927,29 @@ def main() -> int:
         assert collection_result["session_name"] == collection_session
         assert collection_result["coverage_end_utc"] == collection_stop_utc
         assert collection_result["coverage_source"] == "validated logman control receipts"
+        english_stop_receipt = directory / "english-post-stop-query.txt"
+        english_stop_receipt.write_text(
+            collection_stop_receipt.read_text(encoding="utf-8").replace(
+                "Ошибка: Набор программ сбора данных не найден.",
+                "Data Collector Set was not found."),
+            encoding="utf-8")
+        english_stop_result = EVALUATOR.ETL_PARSER._read_control_receipt(
+            english_stop_receipt, "stop", collection_session, collection_etl, 4096)
+        assert english_stop_result["post_stop_query_hresult"] == "0x80300002"
+        names.append("localized_post_stop_hresult_is_locale_independent")
+        arbitrary_exit_receipt = directory / "arbitrary-post-stop-exit.txt"
+        arbitrary_exit_receipt.write_text(
+            collection_stop_receipt.read_text(encoding="utf-8").replace(
+                "post_stop_query_exit_code=-2144337918", "post_stop_query_exit_code=1"),
+            encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._read_control_receipt(
+                arbitrary_exit_receipt, "stop", collection_session, collection_etl, 4096)
+        except ValueError as error:
+            assert "0x80300002" in str(error)
+            names.append("arbitrary_post_stop_exit_blocked")
+        else:
+            raise AssertionError("arbitrary post-stop nonzero exit unexpectedly passed")
         full_collection_result = EVALUATOR.ETL_PARSER._read_collection_metadata(
             collection_metadata_path, collection_etl, summary_metadata)
         assert full_collection_result["coverage_source"] == "tracerpt -summary and validated logman control receipts"
@@ -1123,6 +1151,7 @@ def main() -> int:
         tracerpt_xml = directory / "tracerpt-kernel-process-shape.xml"
         tracerpt_xml.write_text(
             """<Events xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\">
+  <Event><System><Provider Name=\"EventTrace\" Guid=\"{68FDD900-4A3E-11D1-84F4-0000F80464E3}\"/><EventID>0</EventID></System><EventData><Data Name=\"MaxFileSize\">16</Data><Data Name=\"LogFileMode\">0x0</Data><Data Name=\"BuffersWritten\">6</Data><Data Name=\"EventsLost\">0</Data><Data Name=\"BuffersLost\">0</Data></EventData></Event>
   <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>1</EventID><TimeCreated SystemTime=\"2026-11-22T00:00:01.1234567Z\"/></System><EventData><Data Name=\"ProcessID\">240148</Data><Data Name=\"CreateTime\">2026-11-22T00:00:00.0000000Z</Data><Data Name=\"ParentProcessID\">2620</Data><Data Name=\"ImageName\">\\\\Device\\\\HarddiskVolume2\\\\Windows\\\\System32\\\\cmd.exe</Data></EventData></Event>
   <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>2</EventID><TimeCreated SystemTime=\"2026-11-22T00:00:02.1234567Z\"/></System><EventData><Data Name=\"ProcessID\">240148</Data><Data Name=\"CreateTime\">2026-11-22T00:00:00.0000000Z</Data><Data Name=\"ExitTime\">2026-11-22T00:00:02.1234567Z</Data><Data Name=\"ExitCode\">0</Data></EventData></Event>
 </Events>""",
@@ -1132,12 +1161,67 @@ def main() -> int:
             "Start Time: 2026-11-22T00:00:00Z\n"
             "End Time: 2026-11-22T00:01:00Z\n"
             "Logger Name: FX-T18-KernelProcess\n"
-            "Total Events Lost 0\nTotal Buffers Lost 0\n")
+            "Total Buffers Processed 6\nTotal Events Processed 11\nTotal Events  Lost      0\n")
         assert len(tracerpt_events) == 2
         assert tracerpt_events[0]["process_name"] == "cmd.exe"
         assert tracerpt_events[1]["parent_pid"] == 2620
         assert tracerpt_metadata["lost_events"] == 0 and tracerpt_metadata["buffer_loss_events"] == 0
+        assert tracerpt_metadata["summary_buffers_processed"] == 6
+        assert tracerpt_metadata["summary_events_processed"] == 11
+        assert tracerpt_metadata["eventtrace_header"]["max_file_size_mb"] == 16
+        assert tracerpt_metadata["eventtrace_header"]["log_file_mode"] == 0
+        assert tracerpt_metadata["eventtrace_header"]["buffers_written"] == 6
         names.append("tracerpt_kernel_process_start_stop_shape")
+
+        actual_summary = (
+            "Total Buffers Processed 6\nTotal Events Processed 11\n"
+            "Total Events  Lost      0\n")
+        parsed_actual_summary = EVALUATOR.ETL_PARSER._parse_tracerpt_summary(actual_summary)
+        assert parsed_actual_summary["lost_events"] == 0
+        assert parsed_actual_summary["buffer_loss_events"] is None
+        assert parsed_actual_summary["summary_buffers_processed"] == 6
+        assert parsed_actual_summary["summary_events_processed"] == 11
+        names.append("actual_whitespace_tracerpt_summary")
+        valid_xml_text = tracerpt_xml.read_text(encoding="utf-8")
+        header_event = (
+            '  <Event><System><Provider Name="EventTrace" '
+            'Guid="{68FDD900-4A3E-11D1-84F4-0000F80464E3}"/><EventID>0</EventID>'
+            '</System><EventData><Data Name="MaxFileSize">16</Data>'
+            '<Data Name="LogFileMode">0x0</Data><Data Name="BuffersWritten">6</Data>'
+            '<Data Name="EventsLost">0</Data><Data Name="BuffersLost">0</Data>'
+            '</EventData></Event>')
+
+        def assert_xml_blocked(name: str, xml_text: str, summary_text: str = actual_summary) -> None:
+            candidate = directory / (name + ".xml")
+            candidate.write_text(xml_text, encoding="utf-8")
+            try:
+                EVALUATOR.ETL_PARSER._parse_xml(candidate, summary_text)
+            except ValueError:
+                names.append(name)
+            else:
+                raise AssertionError(f"{name} unexpectedly passed")
+
+        assert_xml_blocked(
+            "eventtrace_header_missing_blocked",
+            valid_xml_text.replace(header_event + "\n", ""))
+        assert_xml_blocked(
+            "eventtrace_header_duplicate_blocked",
+            valid_xml_text.replace("</Events>", header_event + "\n</Events>"))
+        assert_xml_blocked(
+            "eventtrace_header_summary_contradiction_blocked",
+            valid_xml_text,
+            actual_summary.replace("Total Buffers Processed 6", "Total Buffers Processed 5"))
+        assert_xml_blocked(
+            "summary_duplicate_loss_counter_blocked",
+            valid_xml_text,
+            actual_summary + "Total Events Lost 0\n")
+        assert_xml_blocked(
+            "header_negative_loss_counter_blocked",
+            valid_xml_text.replace('<Data Name="EventsLost">0</Data>', '<Data Name="EventsLost">-1</Data>'))
+        diagnostic_source = (HERE / "diagnose-fx-t18-tracerpt-compatibility.ps1").read_text(encoding="utf-8")
+        assert "ErrorActionPreference = 'Continue'" in diagnostic_source
+        assert "0x80300002" in diagnostic_source and "Get-PostStopDiagnostics $postStopQuery $stop" in diagnostic_source
+        names.append("ps51_native_hresult_and_locale_independent_cleanup_fixture")
         fixture_parse = json.loads((strict_witness.parent / "collector-parse.json").read_text())
         assert "--identity-join" not in fixture_parse["parser_provenance"]["command_argv"]
         assert "-summary" not in fixture_parse["parser_provenance"]["command_argv"]

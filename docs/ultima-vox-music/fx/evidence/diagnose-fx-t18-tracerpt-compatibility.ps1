@@ -131,15 +131,29 @@ function Assert-ToolIdentityUnchanged([string]$Path, [object]$ExpectedIdentity,
 }
 
 function Invoke-Native([string]$Path, [string[]]$Arguments) {
+    # Windows PowerShell 5.1 promotes redirected native stderr to a
+    # RemoteException when ErrorActionPreference is Stop. That must not turn a
+    # real native HRESULT/exit code into the synthetic -1 used only for a
+    # process-launch failure. Temporarily collect native output with Continue,
+    # then read LASTEXITCODE before restoring the caller's preference.
+    $previousPreference = $ErrorActionPreference
+    $raw = @()
+    $exitCode = $null
     try {
+        $ErrorActionPreference = 'Continue'
         $raw = @(& $Path @Arguments 2>&1)
         $exitCode = [int]$LASTEXITCODE
-        $text = ($raw | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
-        return [pscustomobject]@{ exit_code = $exitCode; text = $text; arguments = $Arguments }
     }
     catch {
-        return [pscustomobject]@{ exit_code = -1; text = $_.Exception.ToString(); arguments = $Arguments }
+        $text = ($raw | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        if ([string]::IsNullOrEmpty($text)) { $text = $_.Exception.ToString() }
+        return [pscustomobject]@{ exit_code = -1; text = $text; arguments = $Arguments }
     }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    $text = ($raw | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+    return [pscustomobject]@{ exit_code = $exitCode; text = $text; arguments = $Arguments }
 }
 
 function Save-NativeResult([object]$Result, [string]$Path) {
@@ -206,19 +220,24 @@ function Get-ActiveQueryDiagnostics([object]$Result, [string]$Session) {
     }
 }
 
-function Get-PostStopDiagnostics([object]$Result) {
+function Get-PostStopDiagnostics([object]$Result, [object]$StopResult) {
     $text = [string]$Result.text
-    $notFound = ($text -match '(?i)not found|does not exist|cannot find|no such')
     $active = ($text -match '(?im)status\s*[:=]\s*running\b')
+    $stopSucceeded = ([int]$StopResult.exit_code -eq 0)
+    $exactTransientHresult = (@(-2144337918, 2150629378) -contains [int64]$Result.exit_code)
+    $absenceVerified = ($stopSucceeded -and $exactTransientHresult -and -not $active)
     return [ordered]@{
         exit_code = $Result.exit_code
+        hresult = if ($exactTransientHresult) { '0x80300002' } else { $null }
         output_present = (-not [string]::IsNullOrEmpty($text.Trim()))
-        absence_verified = ($Result.exit_code -ne 0 -and $notFound)
+        stop_succeeded = $stopSucceeded
+        absence_verified = $absenceVerified
         active_marker = $active
-        format_status = if ($Result.exit_code -ne 0 -and $notFound) { 'absence_confirmed' }
+        format_status = if (-not $stopSucceeded) { 'stop_failed' }
             elseif ($active) { 'still_active' }
-            elseif ($Result.exit_code -eq 0) { 'unknown_labels' }
-            else { 'unknown_error_format' }
+            elseif ($exactTransientHresult) { 'absence_confirmed' }
+            elseif ($Result.exit_code -eq 0) { 'unexpected_success' }
+            else { 'unexpected_hresult' }
     }
 }
 
@@ -454,7 +473,7 @@ finally {
     Save-NativeResult $stop $stopRaw
     $postStopQuery = Invoke-Native $LogmanPath @('query', $session, '-ets')
     Save-NativeResult $postStopQuery $postStopQueryRaw
-    $postStopDiagnostics = Get-PostStopDiagnostics $postStopQuery
+    $postStopDiagnostics = Get-PostStopDiagnostics $postStopQuery $stop
     $postStopAbsent = $postStopDiagnostics.absence_verified
 }
 
@@ -491,8 +510,8 @@ if ($collectionReady) {
             (Test-Path -LiteralPath $tracerptSummary -PathType Leaf))
         if ($decoderReady) {
             $summaryText = Get-Content -LiteralPath $tracerptSummary -Raw
-            $eventsLostFieldPresent = ($summaryText -match '(?im)^\s*(?:(?:total|number\s+of)\s+)?events?\s+lost\s*(?::|=)')
-            $buffersLostFieldPresent = ($summaryText -match '(?im)^\s*(?:(?:total|number\s+of)\s+)?(?:log\s+|real\s+time\s+)?buffers?\s+lost\s*(?::|=)')
+            $eventsLostFieldPresent = ($summaryText -match '(?im)^\s*(?:(?:total|number\s+of)\s+)?events?\s+lost\s*(?:(?::|=)\s*|\s+)[0-9]')
+            $buffersLostFieldPresent = ($summaryText -match '(?im)^\s*(?:(?:total|number\s+of)\s+)?(?:log\s+|real\s+time\s+)?buffers?\s+lost\s*(?:(?::|=)\s*|\s+)[0-9]')
             $summaryLossDiagnostics = [ordered]@{
                 output_present = (-not [string]::IsNullOrEmpty($summaryText.Trim()))
                 events_lost_field_present = $eventsLostFieldPresent
@@ -520,7 +539,13 @@ if ($collectionReady) {
                         [int]$parserDiagnosticValue.process_start_events -gt 0 -and
                         [int]$parserDiagnosticValue.process_stop_events -gt 0 -and
                         [int]$parserDiagnosticValue.lost_events -eq 0 -and
-                        [int]$parserDiagnosticValue.buffer_loss_events -eq 0)
+                        [int]$parserDiagnosticValue.buffer_loss_events -eq 0 -and
+                        $null -ne $parserDiagnosticValue.eventtrace_header -and
+                        [int]$parserDiagnosticValue.eventtrace_header.max_file_size_mb -eq 16 -and
+                        [int]$parserDiagnosticValue.eventtrace_header.log_file_mode -eq 0 -and
+                        [int]$parserDiagnosticValue.eventtrace_header.buffers_written -gt 0 -and
+                        [int]$parserDiagnosticValue.eventtrace_header.events_lost -eq 0 -and
+                        [int]$parserDiagnosticValue.eventtrace_header.buffers_lost -eq 0)
                 }
                 catch {
                     $operationError = if ($operationError) { "$operationError; diagnostic parser JSON: $($_.Exception.Message)" } else { "diagnostic parser JSON: $($_.Exception.Message)" }
@@ -592,6 +617,7 @@ $sanitizedSummary = [ordered]@{
     controlled_process_exit_code = $processExitCode
     stop_exit_code = $stop.exit_code
     post_stop_query_exit_code = $postStopQuery.exit_code
+    post_stop_query_hresult = $postStopDiagnostics.hresult
     post_stop_absence_verified = $postStopAbsent
     post_stop_format_status = $postStopDiagnostics.format_status
     post_stop_output_present = $postStopDiagnostics.output_present

@@ -7,8 +7,9 @@ parse receipt and an owner-signed JSON claim is not a parser.  The wrapper
 records the raw ETL hash, the exact tracerpt path/normalized version/SHA-256/command,
 where the SHA-256 is supplied as an owner-approved expected identity and bound
 to an independently verified approval JSON/signature/verification receipt, and
-the retained ``tracerpt -summary`` artifact that supplies loss counters and
-trace metadata, plus retained collection metadata whose hashed start/stop
+the retained ``tracerpt -summary`` artifact that supplies trace metadata and
+reconciliation counters, plus the validated decoded EventTrace Header that
+supplies trace capacity/loss fields, and retained collection metadata whose hashed start/stop
 control receipts prove the bounded noncircular logger, and digests of both the
 raw ETW core and the enriched identity-joined event stream. Production parsing
 requires a retained
@@ -23,8 +24,9 @@ qualification-prohibited, and exercises the same raw-byte hash and replay
 checks.  It is not a substitute for a Windows ETL or a genuine tracerpt XML
 and summary artifact. ``--diagnostic-decoded-xml`` plus
 ``--diagnostic-summary`` and ``--diagnostic-controlled-process`` is a separate
-compatibility-only path: it applies the production XML/summary field and
-counter parser to retained outputs from an exact, signature-checked decoder,
+compatibility-only path: with the original ``--etl`` it applies the production
+XML/summary field and counter parser to retained outputs from an exact,
+signature-checked decoder,
 binds the observed process start/stop to the private controlled-process PID
 and creation-time receipt, and never creates a production receipt or relaxes
 the pinned version/hash gate.
@@ -45,9 +47,10 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 FORMAT = "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
-PARSER_VERSION = "1.5.0"
+PARSER_VERSION = "1.6.0"
 PROVIDER = "Microsoft-Windows-Kernel-Process/ETW"
 PROVIDER_GUID = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716"
+EVENT_TRACE_PROVIDER_GUID = "68fdd900-4a3e-11d1-84f4-0000f80464e3"
 PROCESS_PROVIDER_NAMES = {
     "microsoft-windows-kernel-process",
     "microsoft-windows-kernel-process/etw",
@@ -58,7 +61,7 @@ TOOLCHAIN_ID = "microsoft-windows-sdk-tracerpt-10.0.26100.1"
 PINNED_TRACERPT_VERSION = "10.0.26100.1"
 TRACERPT_COMMAND = "tracerpt.exe <raw-etl> -o <decoded-xml> -of XML -lr -summary <tracerpt-summary> -y"
 EVENT_SOURCE = "Microsoft-Windows-Kernel-Process event IDs 1(ProcessStart) and 2(ProcessStop)"
-LOSS_SOURCE = "tracerpt -summary <tracerpt-summary>: Events Lost and Buffers Lost"
+LOSS_SOURCE = "validated EventTrace_Header in retained tracerpt XML; tracerpt -summary loss counters are reconciliation inputs"
 SUMMARY_SOURCE = "tracerpt -summary artifact; counters are not read from stdout/stderr or JSON claims"
 COLLECTION_METADATA_FORMAT = "VOX_FX_T18_ETW_COLLECTION_METADATA_V1"
 COLLECTION_RECEIPT_FORMAT = "VOX_FX_T18_LOGMAN_RECEIPT_V1"
@@ -75,6 +78,8 @@ COLLECTION_CLEANUP_PERSISTED = "persisted_dcs"
 COLLECTION_FILE_POLICY = "single_retained_etl_file_zero_rotation"
 COLLECTION_INVENTORY_SOURCE = "independent_etl_directory_inventory"
 COLLECTION_PROVIDER_GUID = "{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"
+PLA_E_DCS_NOT_FOUND_UNSIGNED = 0x80300002
+PLA_E_DCS_NOT_FOUND_SIGNED = PLA_E_DCS_NOT_FOUND_UNSIGNED - (1 << 32)
 COVERAGE_SOURCE = "tracerpt summary or retained validated logman start/stop receipts"
 SESSION_SOURCE = "tracerpt summary or retained validated logman session receipt"
 SUMMARY_AND_CONTROL_COVERAGE_SOURCE = "tracerpt -summary and validated logman control receipts"
@@ -497,6 +502,52 @@ def _summary_fields(summary: str) -> dict[str, str]:
     return fields
 
 
+_SUMMARY_COUNTER_PATTERNS: dict[str, re.Pattern[str]] = {
+    "buffers_processed": re.compile(
+        r"^\s*(?:(?:total)\s+)?buffers\s+processed\s*"
+        r"(?:(?::|=)\s*|\s+)([0-9][0-9,]*)\s*$", re.IGNORECASE),
+    "events_processed": re.compile(
+        r"^\s*(?:(?:total)\s+)?events\s+processed\s*"
+        r"(?:(?::|=)\s*|\s+)([0-9][0-9,]*)\s*$", re.IGNORECASE),
+    "lost_events": re.compile(
+        r"^\s*(?:(?:total|number\s+of)\s+)?events?\s+lost\s*"
+        r"(?:(?::|=)\s*|\s+)([0-9][0-9,]*)\s*$", re.IGNORECASE),
+    "buffer_loss_events": re.compile(
+        r"^\s*(?:(?:total|number\s+of)\s+)?"
+        r"(?:(?:log|real\s+time)\s+)?buffers?\s+lost\s*"
+        r"(?:(?::|=)\s*|\s+)([0-9][0-9,]*)\s*$", re.IGNORECASE),
+}
+
+_SUMMARY_COUNTER_LABELS: dict[str, re.Pattern[str]] = {
+    "buffers_processed": re.compile(r"\bbuffers\s+processed\b", re.IGNORECASE),
+    "events_processed": re.compile(r"\bevents\s+processed\b", re.IGNORECASE),
+    "lost_events": re.compile(r"\bevents?\s+lost\b", re.IGNORECASE),
+    "buffer_loss_events": re.compile(r"\bbuffers?\s+lost\b", re.IGNORECASE),
+}
+
+
+def _summary_counter_values(summary: str) -> dict[str, int | None]:
+    """Parse tracerpt's counter lines without treating arbitrary XML/text as data."""
+    values: dict[str, list[int]] = {name: [] for name in _SUMMARY_COUNTER_PATTERNS}
+    for line in summary.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        for name, label_pattern in _SUMMARY_COUNTER_LABELS.items():
+            if not label_pattern.search(text):
+                continue
+            match = _SUMMARY_COUNTER_PATTERNS[name].match(text)
+            if match is None:
+                raise ValueError(f"tracerpt -summary {name.replace('_', ' ')} counter syntax is malformed")
+            values[name].append(int(match.group(1).replace(",", ""), 10))
+    result: dict[str, int | None] = {}
+    for name, occurrences in values.items():
+        if len(occurrences) > 1:
+            raise ValueError(f"tracerpt -summary {name.replace('_', ' ')} counter is duplicated")
+        result[name] = occurrences[0] if occurrences else None
+    return result
+
+
 def _summary_value(fields: dict[str, str], *names: str) -> str | None:
     for name in names:
         value = fields.get(name)
@@ -566,26 +617,12 @@ def _summary_timestamp(value: str, name: str) -> str:
     return parsed_utc.strftime("%Y-%m-%dT%H:%M:%S") + "." + fraction_text + "Z"
 
 
-def _parse_tracerpt_summary(summary: str) -> dict[str, Any]:
+def _parse_tracerpt_summary(summary: str, require_loss_counters: bool = False) -> dict[str, Any]:
     fields = _summary_fields(summary)
-    lost_value = _summary_value(fields, "events lost", "number of events lost", "number events lost")
-    # Windows logger text has appeared as both `Buffers Lost` and
-    # `Log Buffers Lost`; prefer the exact aggregate label when it is present,
-    # then accept the file-buffer label used by the same retained trace query.
-    buffer_value = _summary_value(
-        fields, "buffers lost", "number of buffers lost", "number buffers lost",
-        "log buffers lost", "number of log buffers lost",
-    )
-    if lost_value is None or buffer_value is None:
-        lost_match = re.search(
-            r"(?im)^\s*(?:(?:total|number\s+of)\s+)?events?\s+lost\s*(?::|=)?\s*([0-9][0-9,]*)\b", summary)
-        buffer_match = re.search(
-            r"(?im)^\s*(?:(?:total|number\s+of)\s+)?(?:log\s+|real\s+time\s+)?buffers?\s+lost\s*(?::|=)?\s*([0-9][0-9,]*)\b", summary)
-        if lost_value is None and lost_match is not None:
-            lost_value = lost_match.group(1)
-        if buffer_value is None and buffer_match is not None:
-            buffer_value = buffer_match.group(1)
-    if lost_value is None or buffer_value is None:
+    counter_values = _summary_counter_values(summary)
+    lost_events = counter_values["lost_events"]
+    buffer_loss_events = counter_values["buffer_loss_events"]
+    if require_loss_counters and (lost_events is None or buffer_loss_events is None):
         raise ValueError("tracerpt -summary Events Lost/Buffers Lost counters are absent")
     start_value = _summary_value(fields, "log start time", "trace start time", "start time") \
         or _summary_unstructured_value(summary, "Log Start Time", "Trace Start Time", "Start Time")
@@ -609,19 +646,104 @@ def _parse_tracerpt_summary(summary: str) -> dict[str, Any]:
         raise ValueError("tracerpt summary coverage interval is not positive")
     if session_value is not None and session_value.startswith("<"):
         session_value = None
-    lost_events = int(str(lost_value).replace(",", ""))
-    buffer_loss_events = int(str(buffer_value).replace(",", ""))
-    if lost_events < 0 or buffer_loss_events < 0:
-        raise ValueError("tracerpt summary loss counters cannot be negative")
     return {
         "lost_events": lost_events,
         "buffer_loss_events": buffer_loss_events,
+        "summary_buffers_processed": counter_values["buffers_processed"],
+        "summary_events_processed": counter_values["events_processed"],
         "coverage_start_utc": start,
         "coverage_end_utc": end,
         "session_name": session_value,
         "summary_source": SUMMARY_SOURCE,
         "coverage_source": COVERAGE_SOURCE,
         "session_name_source": SESSION_SOURCE,
+    }
+
+
+def _parse_nonnegative_uint(value: str | None, name: str) -> int:
+    text = (value or "").strip()
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+|[0-9]+", text) is None:
+        raise ValueError(f"{name} is not a strict non-negative integer")
+    parsed = int(text[2:], 16) if text.casefold().startswith("0x") else int(text, 10)
+    if parsed < 0:  # Defensive: the grammar above intentionally excludes signs.
+        raise ValueError(f"{name} is negative")
+    return parsed
+
+
+def _parse_eventtrace_header(root: ET.Element) -> dict[str, Any]:
+    """Read exactly one structurally identified EventTrace_Header event.
+
+    The header is the decoded representation of TRACE_LOGFILE_HEADER.  Only
+    EventTrace provider GUID 68fdd900-4a3e-11d1-84f4-0000f80464e3, event ID
+    zero, and its single EventData block are considered.  In particular, a
+    Data node with the same name in a process event can never satisfy this
+    function.
+    """
+    candidates: list[ET.Element] = []
+    for event in root.iter():
+        if event.tag.rsplit("}", 1)[-1].casefold() != "event":
+            continue
+        providers = [node for node in event.iter()
+                     if node.tag.rsplit("}", 1)[-1].casefold() == "provider"]
+        event_ids = [node for node in event.iter()
+                     if node.tag.rsplit("}", 1)[-1].casefold() == "eventid"]
+        matching_guid = any(_normalize_guid(node.attrib.get("Guid")) == EVENT_TRACE_PROVIDER_GUID
+                            for node in providers)
+        if not matching_guid:
+            continue
+        if len(event_ids) != 1:
+            raise ValueError("tracerpt XML EventTrace header has an ambiguous EventID")
+        try:
+            event_id = int((event_ids[0].text or "").strip(), 0)
+        except ValueError as error:
+            raise ValueError("tracerpt XML EventTrace header EventID is not numeric") from error
+        if event_id == 0:
+            candidates.append(event)
+    if len(candidates) != 1:
+        raise ValueError("tracerpt XML must contain exactly one validated EventTrace header")
+    event = candidates[0]
+    providers = [node for node in event.iter()
+                 if node.tag.rsplit("}", 1)[-1].casefold() == "provider"]
+    if len(providers) != 1 or _normalize_guid(providers[0].attrib.get("Guid")) != EVENT_TRACE_PROVIDER_GUID:
+        raise ValueError("tracerpt XML EventTrace header provider identity is ambiguous")
+    provider_name = providers[0].attrib.get("Name")
+    if provider_name is not None and provider_name.casefold() != "eventtrace":
+        raise ValueError("tracerpt XML EventTrace header provider name is contradictory")
+    event_data_nodes = [node for node in list(event)
+                        if node.tag.rsplit("}", 1)[-1].casefold() == "eventdata"]
+    if len(event_data_nodes) != 1:
+        raise ValueError("tracerpt XML EventTrace header must contain exactly one EventData block")
+    data_nodes = [node for node in list(event_data_nodes[0])
+                  if node.tag.rsplit("}", 1)[-1].casefold() == "data"]
+    required_names = ("MaxFileSize", "LogFileMode", "BuffersWritten", "EventsLost", "BuffersLost")
+    values: dict[str, list[str]] = {name: [] for name in required_names}
+    wanted = {name.casefold(): name for name in required_names}
+    for node in data_nodes:
+        raw_name = node.attrib.get("Name")
+        canonical_name = wanted.get(str(raw_name or "").casefold())
+        if canonical_name is not None:
+            values[canonical_name].append(node.text or "")
+    if any(len(items) != 1 for items in values.values()):
+        missing = [name for name, items in values.items() if not items]
+        duplicate = [name for name, items in values.items() if len(items) > 1]
+        detail = []
+        if missing:
+            detail.append("missing " + ", ".join(missing))
+        if duplicate:
+            detail.append("duplicated " + ", ".join(duplicate))
+        raise ValueError("tracerpt XML EventTrace header fields are not unambiguous (" + "; ".join(detail) + ")")
+    parsed = {name: _parse_nonnegative_uint(values[name][0], f"EventTrace Header {name}")
+              for name in required_names}
+    return {
+        "provider_guid": EVENT_TRACE_PROVIDER_GUID,
+        "event_id": 0,
+        "max_file_size_mb": parsed["MaxFileSize"],
+        "log_file_mode": parsed["LogFileMode"],
+        "log_file_mode_hex": f"0x{parsed['LogFileMode']:x}",
+        "buffers_written": parsed["BuffersWritten"],
+        "events_lost": parsed["EventsLost"],
+        "buffers_lost": parsed["BuffersLost"],
+        "source": "validated EventTrace_Header event in retained tracerpt XML",
     }
 
 
@@ -707,6 +829,24 @@ def _parse_xml(decoded: Path, summary: str) -> tuple[list[dict[str, Any]], dict[
         events.append(record)
     events = _required_event_shape(events)
     metadata = _parse_tracerpt_summary(summary)
+    header = _parse_eventtrace_header(root)
+    summary_pairs = (
+        (metadata.get("summary_buffers_processed"), header["buffers_written"], "BuffersProcessed/BuffersWritten"),
+        (metadata.get("lost_events"), header["events_lost"], "EventsLost"),
+        (metadata.get("buffer_loss_events"), header["buffers_lost"], "BuffersLost"),
+    )
+    for summary_value, header_value, label in summary_pairs:
+        if summary_value is not None and summary_value != header_value:
+            raise ValueError(f"tracerpt summary/header {label} counters contradict")
+    # The XML EventTrace header is the authoritative source for trace-header
+    # capacity and loss fields. A missing summary Buffers Lost line is valid
+    # only because this independently identified header supplies it.
+    metadata["lost_events"] = header["events_lost"]
+    metadata["buffer_loss_events"] = header["buffers_lost"]
+    metadata["max_file_size_mb"] = header["max_file_size_mb"]
+    metadata["log_file_mode"] = header["log_file_mode"]
+    metadata["buffers_written"] = header["buffers_written"]
+    metadata["eventtrace_header"] = header
     if events and metadata.get("coverage_start_utc") is not None and metadata.get("coverage_end_utc") is not None:
         first = utc(events[0]["timestamp_utc"])
         last = utc(events[-1]["timestamp_utc"])
@@ -760,7 +900,7 @@ def _controlled_process_binding(events: list[dict[str, Any]],
     }
 
 
-def make_compatibility_diagnostic(decoded_xml: Path, summary_path: Path,
+def make_compatibility_diagnostic(raw_etl: Path, decoded_xml: Path, summary_path: Path,
                                   controlled_process_path: Path) -> dict[str, Any]:
     """Apply production XML/summary parsing without creating a production receipt.
 
@@ -770,9 +910,9 @@ def make_compatibility_diagnostic(decoded_xml: Path, summary_path: Path,
     counters, binding booleans/counts and artifact hashes; it never applies a
     production toolchain exception or publishes raw process identity.
     """
-    if (not decoded_xml.is_file() or not summary_path.is_file()
+    if (not raw_etl.is_file() or not decoded_xml.is_file() or not summary_path.is_file()
             or not controlled_process_path.is_file()):
-        raise ValueError("compatibility diagnostic requires retained XML, summary and controlled-process artifacts")
+        raise ValueError("compatibility diagnostic requires retained ETL, XML, summary and controlled-process artifacts")
     summary = _read_summary_text(summary_path)
     events, counters = _parse_xml(decoded_xml, summary)
     starts = sum(1 for event in events if event["event"] == "start")
@@ -785,14 +925,26 @@ def make_compatibility_diagnostic(decoded_xml: Path, summary_path: Path,
         "diagnostic_only": True,
         "qualification_prohibited": True,
         "production_receipt_created": False,
+        "retained_artifacts_unchanged": True,
+        "raw_etl_path": str(raw_etl.resolve()),
+        "raw_etl_sha256": sha256(raw_etl),
+        "decoded_xml_path": str(decoded_xml.resolve()),
         "decoded_xml_sha256": sha256(decoded_xml),
+        "summary_path": str(summary_path.resolve()),
         "summary_sha256": sha256(summary_path),
+        "controlled_process_path": str(controlled_process_path.resolve()),
         "process_event_shape_valid": True,
         "process_start_events": starts,
         "process_stop_events": stops,
         "events_received": counters["events_received"],
         "lost_events": counters["lost_events"],
         "buffer_loss_events": counters["buffer_loss_events"],
+        "max_file_size_mb": counters["max_file_size_mb"],
+        "log_file_mode": counters["log_file_mode"],
+        "buffers_written": counters["buffers_written"],
+        "summary_buffers_processed": counters.get("summary_buffers_processed"),
+        "summary_events_processed": counters.get("summary_events_processed"),
+        "eventtrace_header": counters["eventtrace_header"],
         "coverage_start_utc": counters.get("coverage_start_utc"),
         "coverage_end_utc": counters.get("coverage_end_utc"),
         "session_name_present": bool(counters.get("session_name")),
@@ -815,6 +967,16 @@ def _receipt_uint(fields: dict[str, str], name: str, path: Path) -> int:
     if raw is None or re.fullmatch(r"[0-9]+", raw) is None:
         raise ValueError(f"{path}: logman control receipt {name} is not a non-negative integer")
     return int(raw)
+
+
+def _receipt_post_stop_hresult(fields: dict[str, str], path: Path) -> int:
+    raw = fields.get("post_stop_query_exit_code")
+    if raw is None or re.fullmatch(r"-?[0-9]+|0[xX][0-9a-fA-F]+", raw) is None:
+        raise ValueError(f"{path}: post-stop query exit code is not a signed/unsigned integer")
+    value = int(raw, 0) if raw.casefold().startswith("0x") else int(raw, 10)
+    if value not in {PLA_E_DCS_NOT_FOUND_SIGNED, PLA_E_DCS_NOT_FOUND_UNSIGNED}:
+        raise ValueError(f"{path}: direct transient post-stop query did not return PLA_E_DCS_NOT_FOUND (0x80300002)")
+    return value
 
 
 def _receipt_bool(fields: dict[str, str], name: str, path: Path) -> bool:
@@ -1075,10 +1237,12 @@ def _read_control_receipt(path: Path, operation: str, session_name: str | None,
             or (cleanup_mode == COLLECTION_CLEANUP_PERSISTED and not delete_applicable)):
         raise ValueError(f"{path}: stop receipt cleanup mode/delete applicability disagree")
     stop_exit = _receipt_uint(fields, "stop_exit_code", path)
-    post_query_exit = _receipt_uint(fields, "post_stop_query_exit_code", path)
+    post_query_exit = _receipt_post_stop_hresult(fields, path)
+    if fields.get("post_stop_query_hresult", "0x80300002").casefold() != "0x80300002":
+        raise ValueError(f"{path}: retained post-stop HRESULT label is not 0x80300002")
     probe_exit = _receipt_uint(fields, "tracerpt_probe_exit_code", path)
-    if stop_exit != 0 or post_query_exit == 0 or probe_exit != 0:
-        raise ValueError(f"{path}: logman stop/post-stop-query or tracerpt probe did not prove cleanup")
+    if stop_exit != 0 or probe_exit != 0:
+        raise ValueError(f"{path}: logman stop or tracerpt probe did not complete successfully")
     delete_exit: int | None = None
     if delete_applicable:
         delete_exit = _receipt_uint(fields, "delete_exit_code", path)
@@ -1133,12 +1297,14 @@ def _read_control_receipt(path: Path, operation: str, session_name: str | None,
         raise ValueError(f"{path}: stop receipt does not retain successful logman stop output")
     if delete_applicable and re.search(r"\[delete\][\s\S]*?completed successfully", lower_body) is None:
         raise ValueError(f"{path}: stop receipt does not retain successful logman delete output")
-    if re.search(r"(?:not found|does not exist|cannot find|no such)", lower_body) is None:
-        raise ValueError(f"{path}: post-stop query does not prove the session was disabled")
+    # Do not use English/Russian/localized text as the cleanup proof. The
+    # exact HRESULT is the locale-independent PLA contract, and the raw
+    # post-stop output remains retained above for audit.
     result = _control_receipt_projection(path, fields, operation, control_time_utc)
     result.update({
         "exit_code": stop_exit,
         "post_stop_query_exit_code": post_query_exit,
+        "post_stop_query_hresult": "0x80300002",
         "delete_exit_code": delete_exit,
         "tracerpt_probe_exit_code": probe_exit,
         "bytes_written": bytes_written,
@@ -1364,6 +1530,9 @@ def _run_tracerpt(raw_path: Path, tool_path: Path,
         events, counters = _parse_xml(output, _read_summary_text(summary))
         if collection_metadata_path is not None:
             collection = _read_collection_metadata(collection_metadata_path.resolve(), raw_path, counters)
+            header = counters.get("eventtrace_header")
+            if not isinstance(header, dict) or header.get("max_file_size_mb") != collection["max_file_mb"]:
+                raise ValueError("retained EventTrace Header MaxFileSize does not reconcile to the production collection capacity")
             counters.update(collection)
         for field in ("coverage_start_utc", "coverage_end_utc", "session_name"):
             if not counters.get(field):
@@ -1477,6 +1646,7 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
             "summary_sha256": counters["summary_sha256"],
             "collection_metadata_path": str(collection_metadata_path.resolve()),
             "collection_metadata_sha256": sha256(collection_metadata_path.resolve()),
+            "eventtrace_header": counters["eventtrace_header"],
         })
         provenance.update(tool_approval)
     if join_path is not None:
@@ -1485,7 +1655,7 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
             "identity_join_path": str(join_path),
             "identity_join_sha256": sha256(join_path),
         })
-    return {
+    receipt: dict[str, Any] = {
         "format": FORMAT, "provider": PROVIDER, "session_name": derived_session,
         "coverage_start_utc": start, "coverage_end_utc": end,
         "events_received": counters["events_received"],
@@ -1494,6 +1664,12 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
         "process_events": events, "process_event_digest": full_digest,
         "parser_provenance": provenance,
     }
+    if not fixture:
+        receipt["max_file_size_mb"] = counters["max_file_size_mb"]
+        receipt["log_file_mode"] = counters["log_file_mode"]
+        receipt["buffers_written"] = counters["buffers_written"]
+        receipt["eventtrace_header"] = counters["eventtrace_header"]
+    return receipt
 
 def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = False) -> None:
     if receipt.get("format") != FORMAT or receipt.get("provider") != PROVIDER:
@@ -1542,6 +1718,26 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
     if not fixture and not SHA256_RE.fullmatch(provenance["tool_sha256"]):
         raise ValueError("production ETW parse receipt lacks a trusted tracerpt executable SHA-256")
     if not fixture:
+        header = provenance.get("eventtrace_header")
+        if not isinstance(header, dict) or receipt.get("eventtrace_header") != header:
+            raise ValueError("production ETW parse receipt lacks its validated EventTrace header provenance")
+        if (receipt.get("max_file_size_mb") != header.get("max_file_size_mb")
+                or receipt.get("log_file_mode") != header.get("log_file_mode")
+                or receipt.get("buffers_written") != header.get("buffers_written")):
+            raise ValueError("production ETW parse receipt header projection does not reconcile")
+        required_header = {
+            "provider_guid", "event_id", "max_file_size_mb", "log_file_mode",
+            "buffers_written", "events_lost", "buffers_lost",
+        }
+        if set(required_header) - set(header):
+            raise ValueError("production ETW parse receipt EventTrace header provenance is incomplete")
+        for field in ("event_id", "max_file_size_mb", "log_file_mode", "buffers_written", "events_lost", "buffers_lost"):
+            if type(header.get(field)) is not int or header[field] < 0:
+                raise ValueError("production ETW parse receipt EventTrace header contains a non-negative integer violation")
+        if (header.get("provider_guid") != EVENT_TRACE_PROVIDER_GUID
+                or header.get("event_id") != 0
+                or header.get("log_file_mode_hex") != f"0x{header['log_file_mode']:x}"):
+            raise ValueError("production ETW parse receipt EventTrace header identity/mode is invalid")
         approval_fields = (
             "tool_approval_path", "tool_approval_sha256",
             "tool_approval_signature_path", "tool_approval_signature_sha256",
@@ -1572,6 +1768,12 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
         if not summary_path.is_file() or sha256(summary_path).casefold() != summary_hash.casefold():
             raise ValueError("retained tracerpt summary hash does not reconcile")
         retained_summary = _parse_tracerpt_summary(_read_summary_text(summary_path))
+        header = provenance["eventtrace_header"]
+        for summary_field, header_field in (("lost_events", "events_lost"),
+                                            ("buffer_loss_events", "buffers_lost")):
+            summary_value = retained_summary.get(summary_field)
+            if summary_value is not None and summary_value != header[header_field]:
+                raise ValueError("retained tracerpt summary counter contradicts the validated EventTrace header")
         collection_value = provenance.get("collection_metadata_path")
         collection_hash = provenance.get("collection_metadata_sha256")
         if (not isinstance(collection_value, str) or not collection_value
@@ -1589,8 +1791,8 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
             "session_name": receipt.get("session_name"),
         }
         actual_metadata = {
-            "lost_events": retained_summary["lost_events"],
-            "buffer_loss_events": retained_summary["buffer_loss_events"],
+            "lost_events": header["events_lost"],
+            "buffer_loss_events": header["buffers_lost"],
             "coverage_start_utc": collection["coverage_start_utc"],
             "coverage_end_utc": collection["coverage_end_utc"],
             "session_name": collection["session_name"],
@@ -1661,6 +1863,7 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
         "lost_events": receipt.get("lost_events"),
         "buffer_loss_events": receipt.get("buffer_loss_events"),
         "events_received": receipt.get("events_received"),
+        "eventtrace_header": receipt.get("eventtrace_header"),
         "coverage_start_utc": receipt.get("coverage_start_utc"),
         "coverage_end_utc": receipt.get("coverage_end_utc"),
         "session_name": receipt.get("session_name"),
@@ -1711,8 +1914,14 @@ def main() -> int:
         if any(value is not None for value in diagnostic_args):
             if any(value is None for value in diagnostic_args) or args.fixture_raw or args.verify_receipt:
                 parser.error("diagnostic mode requires XML, summary, controlled-process receipt and output, without fixture/replay mode")
+            diagnostic_inputs = {
+                args.etl.resolve(), args.diagnostic_decoded_xml.resolve(),
+                args.diagnostic_summary.resolve(), args.diagnostic_controlled_process.resolve(),
+            }
+            if args.diagnostic_output.resolve() in diagnostic_inputs:
+                parser.error("--diagnostic-output must be a separate report path; retained inputs are immutable")
             diagnostic = make_compatibility_diagnostic(
-                args.diagnostic_decoded_xml, args.diagnostic_summary,
+                args.etl, args.diagnostic_decoded_xml, args.diagnostic_summary,
                 args.diagnostic_controlled_process)
             args.diagnostic_output.write_text(json.dumps(diagnostic, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             if not diagnostic["controlled_process_binding_valid"]:

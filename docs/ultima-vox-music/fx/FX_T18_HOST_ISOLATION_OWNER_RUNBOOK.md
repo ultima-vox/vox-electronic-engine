@@ -345,7 +345,13 @@ try {
   $stop = Invoke-LogmanStep $stopArgs
   if ($stop.exit_code -ne 0 -or $stop.text -notmatch '(?i)completed successfully') { throw 'logman stop trace failed' }
   $postQuery = Invoke-LogmanStep $queryArgs
-  if ($postQuery.exit_code -eq 0 -or $postQuery.text -notmatch '(?i)not found|does not exist|cannot find|no such') { throw 'post-stop logman query did not prove the session was disabled' }
+  # The direct -ets post-stop query is expected to return the locale-neutral
+  # PLA_E_DCS_NOT_FOUND HRESULT. Do not classify arbitrary nonzero exits or
+  # localized English/Russian text as proof of cleanup.
+  $postStopHresults = @(-2144337918, 2150629378) # signed/unsigned 0x80300002
+  if ($stop.exit_code -ne 0 -or $postStopHresults -notcontains [int64]$postQuery.exit_code) {
+    throw 'post-stop logman query did not return exact PLA_E_DCS_NOT_FOUND (0x80300002) after a successful stop'
+  }
   # Retain a pinned tracerpt summary as a second, independent ETW-header
   # boundary. If the stop command itself exposes Stop Time, that raw control
   # output remains acceptable when a summary has no coverage labels; otherwise
@@ -405,6 +411,7 @@ try {
     "etl_path=$etl"
     "stop_exit_code=$($stop.exit_code)"
     "post_stop_query_exit_code=$($postQuery.exit_code)"
+    'post_stop_query_hresult=0x80300002'
     "tracerpt_probe_exit_code=$probeExit"
     "command_stop=$stopCommand"
     "command_post_stop_query=$queryCommand"
@@ -692,6 +699,7 @@ $summary = Get-Content -LiteralPath "$diagnosticRoot\diagnostic-summary.json" -R
   preflight_passed = $summary.preflight_passed
   active_query_format_status = $summary.active_query_format_status
   post_stop_format_status = $summary.post_stop_format_status
+  post_stop_query_hresult = $summary.post_stop_query_hresult
   post_stop_absence_verified = $summary.post_stop_absence_verified
   decoder_outputs_present = $summary.decoder_outputs_present
   summary_loss_fields = $summary.summary_loss_fields
@@ -702,9 +710,11 @@ $summary = Get-Content -LiteralPath "$diagnosticRoot\diagnostic-summary.json" -R
 ```
 
 `post_stop_absence_verified=true`, `decoder_outputs_present=true`,
-`summary_loss_fields.fields_present=true`, and exactly one controlled start and
+`eventtrace_header.max_file_size_mb=16`,
+`eventtrace_header.log_file_mode=0x0`, and exactly one controlled start and
 stop match are required for `COMPATIBILITY_EVIDENCE_READY`; any other result is
-blocked evidence and must not be retried.
+blocked evidence and must not be retried. The header, not a guessed summary
+zero, supplies `BuffersLost` when the observed summary omits that line.
 
 Exit `0` means only that the bounded compatibility artifacts were produced;
 it is not `WALL_GATE_PASS`, qualification, or approval of the installed build.
@@ -724,12 +734,29 @@ python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
   --diagnostic-output "$diagnosticRoot\diagnostic-parser.json"
 ```
 
+For an offline replay of the original retained artifacts, write a separate
+report and leave `compat.etl`, `tracerpt-output.xml`, `tracerpt-summary.txt`,
+and `controlled-process.json` untouched:
+
+```powershell
+$replayReport = Join-Path $diagnosticRoot 'offline-replay-report.json'
+python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
+  --etl "$diagnosticRoot\compat.etl" `
+  --diagnostic-decoded-xml "$diagnosticRoot\tracerpt-output.xml" `
+  --diagnostic-summary "$diagnosticRoot\tracerpt-summary.txt" `
+  --diagnostic-controlled-process "$diagnosticRoot\controlled-process.json" `
+  --diagnostic-output $replayReport
+$replayExit = $LASTEXITCODE
+Get-Content -LiteralPath $replayReport -Raw | ConvertFrom-Json | Format-List
+```
+
 The script performs that parser invocation itself; the command above documents
 the exact field/counter/binding test and is not a second decoder run. The
 parser diagnostic applies the production XML/summary field shape, binds exactly
 one observed start and stop to the private controlled PID plus creation time
-(with only a one-second timestamp-representation tolerance), parses `Events
-Lost`, `Buffers Lost`, coverage and logger metadata, and emits
+(with only a one-second timestamp-representation tolerance), validates the
+single EventTrace Header for `MaxFileSize`, `LogFileMode`, `BuffersWritten`,
+`EventsLost`, and `BuffersLost`, reconciles summary counters, and emits
 only sanitized booleans/counts and artifact hashes with
 `qualification_prohibited=true`. The raw controlled-process identity remains
 private.
