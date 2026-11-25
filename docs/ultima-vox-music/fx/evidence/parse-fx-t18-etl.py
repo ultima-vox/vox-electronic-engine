@@ -4,7 +4,8 @@
 The production path is deliberately a thin, reproducible wrapper around the
 pinned Microsoft Windows SDK ``tracerpt.exe`` tool.  Capture never creates a
 parse receipt and an owner-signed JSON claim is not a parser.  The wrapper
-records the raw ETL hash, the exact tracerpt path/version/command, the
+records the raw ETL hash, the exact tracerpt path/normalized version/SHA-256/command,
+where the SHA-256 is supplied as an owner-approved expected identity, and the
 retained ``tracerpt -summary`` artifact that supplies loss counters and
 trace metadata, plus retained collection metadata whose hashed start/stop
 control receipts prove the bounded noncircular logger, and digests of both the
@@ -37,7 +38,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 FORMAT = "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
-PARSER_VERSION = "1.3.0"
+PARSER_VERSION = "1.4.0"
 PROVIDER = "Microsoft-Windows-Kernel-Process/ETW"
 PROVIDER_GUID = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716"
 PROCESS_PROVIDER_NAMES = {
@@ -312,11 +313,21 @@ def _fixture_result(raw_path: Path) -> tuple[list[dict[str, Any]], dict[str, int
     }, "fixture-json-decoder-v1"
 
 
+def _normalize_tool_version(value: str) -> str:
+    """Normalize Windows FileVersion without accepting a version family."""
+    normalized = re.sub(r"\s*\(WinBuild\.[^)]*\)\s*$", "", str(value).strip(), flags=re.IGNORECASE).strip()
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+", normalized) is None:
+        raise ValueError(f"tracerpt FileVersion is not a normalized four-part version: {value!r}")
+    return normalized
+
+
 def _tool_version(executable: Path) -> str:
     if os.name != "nt":
         raise ValueError("the pinned tracerpt toolchain is Windows-only")
     # FileVersion is the provenance value recorded in the receipt.  The
-    # command is intentionally fixed; no shell interpolation is used.
+    # command is intentionally fixed; no shell interpolation is used. A
+    # trailing parenthesized WinBuild label is normalization-only; the exact
+    # four-part version is still compared to the pinned policy.
     command = ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
                "(Get-Item -LiteralPath $env:FX_T18_TRACERPT).VersionInfo.FileVersion"]
     environment = os.environ.copy()
@@ -328,7 +339,7 @@ def _tool_version(executable: Path) -> str:
     version = completed.stdout.strip()
     if not version:
         raise ValueError("tracerpt file version is empty")
-    return version
+    return _normalize_tool_version(version)
 
 
 def _data_value(event: ET.Element, names: set[str]) -> str | None:
@@ -1157,12 +1168,18 @@ def _read_collection_metadata(path: Path, raw_path: Path,
 
 def _run_tracerpt(raw_path: Path, tool_path: Path,
                   retained_summary_path: Path | None = None,
-                  collection_metadata_path: Path | None = None) -> tuple[list[dict[str, Any]], dict[str, Any], str, list[str]]:
+                  collection_metadata_path: Path | None = None,
+                  expected_tool_sha256: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any], str, str, list[str]]:
     if not tool_path.is_file():
         raise ValueError(f"pinned tracerpt executable is missing: {tool_path}")
-    version = _tool_version(tool_path)
+    resolved_tool = tool_path.resolve()
+    version = _tool_version(resolved_tool)
     if version != PINNED_TRACERPT_VERSION:
         raise ValueError(f"tracerpt version {version!r} is not the pinned {PINNED_TRACERPT_VERSION!r}")
+    tool_hash = sha256(resolved_tool)
+    if expected_tool_sha256 is not None:
+        if not SHA256_RE.fullmatch(expected_tool_sha256) or tool_hash.casefold() != expected_tool_sha256.casefold():
+            raise ValueError("tracerpt executable SHA-256 does not match the owner-approved expected hash")
     with tempfile.TemporaryDirectory(prefix="fx-t18-tracerpt-") as raw_tmp:
         output = Path(raw_tmp) / "decoded.xml"
         summary = (retained_summary_path.resolve() if retained_summary_path is not None
@@ -1192,12 +1209,13 @@ def _run_tracerpt(raw_path: Path, tool_path: Path,
         counters["summary_path"] = str(summary)
         counters["summary_sha256"] = sha256(summary)
         counters["command_argv"] = command
-    return events, counters, version, command
+    return events, counters, version, tool_hash, command
 
 
 def make_receipt(raw_path: Path, coverage_start: str | None = None,
                  coverage_end: str | None = None, session_name: str | None = None,
                  fixture: bool = False, tracerpt_path: Path | None = None,
+                 tracerpt_sha256: str | None = None,
                  identity_join_path: Path | None = None,
                  summary_path: Path | None = None,
                  collection_metadata_path: Path | None = None) -> dict[str, Any]:
@@ -1208,6 +1226,7 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
         raw_events, counters, tool_version = _fixture_result(raw_path)
         events = raw_events
         tool_name = "fixture-json-decoder"
+        tool_hash = "<fixture-tool-sha256>"
         command_argv = ["parse-fx-t18-etl.py", "--fixture-raw", str(raw_path.resolve()),
                         "--output", "<receipt.json>"]
         start = utc_text(coverage_start or "2026-01-01T00:00:00Z")
@@ -1227,8 +1246,10 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
         if collection_metadata_path is None:
             raise ValueError("production ETW parsing requires retained collection start/stop metadata")
         tool = tracerpt_path or Path(os.environ.get("FX_T18_TRACERPT", "tracerpt.exe"))
-        raw_events, counters, tool_version, command_argv = _run_tracerpt(
-            raw_path, tool, summary_path, collection_metadata_path)
+        if not isinstance(tracerpt_sha256, str) or not SHA256_RE.fullmatch(tracerpt_sha256):
+            raise ValueError("production ETW parsing requires the owner-approved tracerpt executable SHA-256")
+        raw_events, counters, tool_version, tool_hash, command_argv = _run_tracerpt(
+            raw_path, tool, summary_path, collection_metadata_path, tracerpt_sha256)
         tool_name = command_argv[0]
         if identity_join_path is None:
             raise ValueError("production ETW parsing requires a retained identity join artifact")
@@ -1246,6 +1267,7 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
     provenance: dict[str, Any] = {
         "parser_name": "vox-fx-t18-raw-etl-verifier", "parser_version": PARSER_VERSION,
         "toolchain_id": TOOLCHAIN_ID, "tool": tool_name, "tool_version": tool_version,
+        "tool_sha256": tool_hash,
         "command_line": json.dumps(command_argv, ensure_ascii=True),
         "command_argv": command_argv, "command_template": TRACERPT_COMMAND,
         "event_source": EVENT_SOURCE, "counter_source": LOSS_SOURCE,
@@ -1294,7 +1316,7 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
     if not isinstance(provenance, dict):
         raise ValueError("ETW parse receipt lacks parser provenance")
     required = (
-        "parser_name", "parser_version", "toolchain_id", "tool_version", "command_line",
+        "parser_name", "parser_version", "toolchain_id", "tool_version", "tool_sha256", "command_line",
         "command_template", "event_source", "counter_source", "summary_source",
         "collection_metadata_source", "collection_control_receipt_source", "coverage_source",
         "session_name_source", "derived_coverage_start_utc",
@@ -1331,6 +1353,8 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
             raise ValueError("command line and argument vector differ")
     except (TypeError, json.JSONDecodeError) as error:
         raise ValueError("ETW parse receipt command line is not a canonical argument vector") from error
+    if not fixture and not SHA256_RE.fullmatch(provenance["tool_sha256"]):
+        raise ValueError("production ETW parse receipt lacks a trusted tracerpt executable SHA-256")
     if not fixture:
         argv = provenance["command_argv"]
         if "-summary" not in argv or "-lr" not in argv or "--identity-join" in argv:
@@ -1398,8 +1422,12 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
     else:
         tool = Path(provenance.get("tool", "tracerpt.exe"))
         collection_path = Path(str(provenance.get("collection_metadata_path", "")))
-        replay_events, replay_counters, _, _ = _run_tracerpt(
-            raw_path, tool, collection_metadata_path=collection_path)
+        replay_events, replay_counters, replay_tool_version, replay_tool_hash, _ = _run_tracerpt(
+            raw_path, tool, collection_metadata_path=collection_path,
+            expected_tool_sha256=provenance["tool_sha256"])
+        if (replay_tool_version != provenance["tool_version"]
+                or replay_tool_hash.casefold() != provenance["tool_sha256"].casefold()):
+            raise ValueError("replayed tracerpt executable identity does not reconcile to parser provenance")
         join_path_value = provenance.get("identity_join_path")
         join_hash = provenance.get("identity_join_sha256")
         if (provenance.get("identity_join_format") != "VOX_FX_T18_ETW_IDENTITY_JOIN_V1"
@@ -1434,6 +1462,7 @@ def main() -> int:
     parser.add_argument("--coverage-end", help="fixture-only declared metadata; production derives this from tracerpt -summary")
     parser.add_argument("--session-name", help="fixture-only declared metadata; production derives this from tracerpt -summary")
     parser.add_argument("--tracerpt", type=Path)
+    parser.add_argument("--tracerpt-sha256", help="owner-approved exact SHA-256 for the production tracerpt executable")
     parser.add_argument("--summary-output", type=Path,
                         help="retained tracerpt -summary artifact; production defaults beside --output")
     parser.add_argument("--collection-metadata", type=Path,
@@ -1456,6 +1485,7 @@ def main() -> int:
             receipt = make_receipt(args.etl, args.coverage_start, args.coverage_end,
                                    args.session_name, fixture=args.fixture_raw,
                                    tracerpt_path=args.tracerpt,
+                                   tracerpt_sha256=args.tracerpt_sha256,
                                    identity_join_path=args.identity_join,
                                    summary_path=summary_path,
                                    collection_metadata_path=args.collection_metadata)

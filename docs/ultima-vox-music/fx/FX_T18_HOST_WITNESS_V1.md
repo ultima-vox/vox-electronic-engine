@@ -189,11 +189,29 @@ process absent from the signed baseline blocks.
 
 `evidence/parse-fx-t18-etl.py` is the owner-independent parser/verifier. The
 production toolchain is pinned to Microsoft Windows SDK `tracerpt.exe`
-`10.0.26100.1`, invoked without a shell as:
+`10.0.26100.1`, with an owner-approved exact executable SHA-256 supplied via
+`--tracerpt-sha256`, and invoked without a shell as:
 
 ```
 tracerpt.exe <raw-etl> -o <decoded-xml> -of XML -lr -summary <tracerpt-summary> -y
 ```
+
+Collection is a separate owner-controlled step using exactly
+`C:\Windows\System32\logman.exe`, never a PATH-resolved copy. Its raw and
+normalized four-part `FileVersion` plus exact SHA-256 must match the same
+owner-approved detached-CMS tool-identity record. Replay does not invoke
+`logman.exe`; it rehashes and version-checks the exact `tracerpt.exe` path from
+the parse provenance and requires the approved `--tracerpt-sha256` value that
+was supplied when the real receipt was created.
+
+The parser trims the Windows `FileVersion` and removes only a trailing
+parenthesized `WinBuild` label before requiring an exact four-part numeric
+version; it does not accept a version family or a hash discovered by the same
+process. The owner must independently approve the full executable path,
+normalized version, and SHA-256, then pass that exact hash to the parser. The
+source pin remains `10.0.26100.1` until a separately reviewed toolchain change
+updates it. A preflight reporting `10.0.26100.8875` is therefore blocked even
+if its file hash is recorded.
 
 The parser consumes `Microsoft-Windows-Kernel-Process` process event IDs 1
 (ProcessStart) and 2 (ProcessStop). A stop XML record may omit image and parent
@@ -251,6 +269,7 @@ python evidence/parse-fx-t18-etl.py --etl D:\\owner-evidence\\fx-t18\\process.et
   --summary-output D:\\owner-evidence\\fx-t18\\process-tracerpt-summary.txt \\
   --collection-metadata D:\\owner-evidence\\fx-t18\\etw-collection-metadata.json \\
   --tracerpt C:\\Windows\\System32\\tracerpt.exe \\
+  --tracerpt-sha256 OWNER_APPROVED_EXACT_TRACERPT_SHA256 \\
   --identity-join D:\\owner-evidence\\fx-t18\\etw-identity-join.json
 python evidence/parse-fx-t18-etl.py --verify-receipt \\
   --etl D:\\owner-evidence\\fx-t18\\process.etl \\

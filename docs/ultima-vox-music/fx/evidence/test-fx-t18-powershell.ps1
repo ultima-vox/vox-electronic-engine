@@ -56,12 +56,18 @@ try {
         @($ownerNewItemCommands | Where-Object { $_.Value -notmatch '(?i)\s-Path\s' }).Count -ne 0) {
         throw 'FX-T18 owner runbook directory creation does not use PowerShell 5.1 -Path syntax'
     }
-    $ownerRunbookCode = [regex]::Match(
+    $ownerRunbookBlocks = [regex]::Matches(
         $ownerRunbookSource, '(?s)```powershell\r?\n(?<code>.*?)\r?\n```')
-    if (-not $ownerRunbookCode.Success) { throw 'FX-T18 owner runbook PowerShell code block is missing' }
-    $ownerRunbookCodePath = Join-Path $tempRoot 'fx-t18-owner-runbook.ps1'
-    $ownerRunbookCode.Groups['code'].Value | Set-Content -LiteralPath $ownerRunbookCodePath -Encoding UTF8
-    Assert-PowerShellParses $ownerRunbookCodePath
+    if ($ownerRunbookBlocks.Count -lt 4) {
+        throw "FX-T18 owner runbook has only $($ownerRunbookBlocks.Count) fenced PowerShell blocks; expected all owner steps"
+    }
+    $ownerRunbookBlockIndex = 0
+    foreach ($ownerRunbookBlock in $ownerRunbookBlocks) {
+        $ownerRunbookCodePath = Join-Path $tempRoot ("fx-t18-owner-runbook-{0}.ps1" -f $ownerRunbookBlockIndex)
+        $ownerRunbookBlock.Groups['code'].Value | Set-Content -LiteralPath $ownerRunbookCodePath -Encoding UTF8
+        Assert-PowerShellParses $ownerRunbookCodePath
+        $ownerRunbookBlockIndex++
+    }
 
     $probePath = Join-Path $tempRoot 'probe.json'
     $probe = [ordered]@{

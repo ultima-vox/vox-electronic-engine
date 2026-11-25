@@ -99,7 +99,12 @@ collector. The pinned toolchain is Microsoft Windows SDK `tracerpt.exe`
 Before parsing, collect the ETW session with an owner-retained start/stop
 record. Capture does not start or control this session. Use an elevated Windows
 PowerShell 5.1 prompt and a unique session name; the kernel-process keyword is
-selected explicitly and the session metadata is retained beside the ETL:
+selected explicitly and the session metadata is retained beside the ETL. The
+supported collector is the owner-approved exact
+`C:\Windows\System32\logman.exe`; invoke that absolute path rather than a
+PATH-resolved `logman.exe`. Its raw/normalized `FileVersion` and exact
+SHA-256 must be retained in the tool-identity record and bound to the same
+owner approval as the decoder:
 
 ```powershell
 $session = 'VOX-FX-T18-KernelProcess-' + [guid]::NewGuid().ToString('N')
@@ -114,6 +119,7 @@ $probeDirectory = Join-Path $etlDirectory 'tracerpt-probe'
 $probeXml = Join-Path $probeDirectory 'decoded.xml'
 $providerName = 'Microsoft-Windows-Kernel-Process'
 $providerGuid = '{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}'
+$logmanPath = 'C:\Windows\System32\logman.exe'
 $keywords = '0x10'
 $level = 5
 $traceMode = 'bin'
@@ -135,7 +141,7 @@ foreach ($path in @($etl, $sessionStart, $sessionStop, $collectionMetadata, $tra
   if (Test-Path -LiteralPath $path) { throw "Refusing to overwrite existing ETW evidence path: $path" }
 }
 function Invoke-LogmanStep([string[]]$Arguments) {
-  $raw = @(& logman.exe @Arguments 2>&1)
+  $raw = @(& $logmanPath @Arguments 2>&1)
   $exitCode = [int]$LASTEXITCODE
   $text = ($raw | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
   [pscustomobject]@{ exit_code = $exitCode; text = $text }
@@ -152,12 +158,12 @@ function Get-ControlTimeUtc([string]$Text, [string]$Label) {
 $sessionStarted = $false
 try {
   $createArgs = @('create', 'trace', $session, '-o', $etl, '-f', $traceMode, '-max', [string]$maxFileMb, '-p', $providerGuid, $keywords, [string]$level, '-ets')
-  $createCommand = "logman.exe create trace `"$session`" -o `"$etl`" -f $traceMode -max $maxFileMb -p $providerGuid $keywords $level -ets"
+  $createCommand = "$logmanPath create trace `"$session`" -o `"$etl`" -f $traceMode -max $maxFileMb -p $providerGuid $keywords $level -ets"
   $create = Invoke-LogmanStep $createArgs
   if ($create.exit_code -ne 0 -or $create.text -notmatch '(?i)completed successfully') { throw 'logman create trace failed' }
   $sessionStarted = $true
   $queryArgs = @('query', $session, '-ets')
-  $queryCommand = "logman.exe query `"$session`" -ets"
+  $queryCommand = "$logmanPath query `"$session`" -ets"
   $startQuery = Invoke-LogmanStep $queryArgs
   if ($startQuery.exit_code -ne 0 -or $startQuery.text -notmatch '(?im)status\s*:\s*running' -or
       $startQuery.text -notmatch [regex]::Escape($providerGuid) -or
@@ -208,7 +214,7 @@ try {
   ) | Set-Content -LiteralPath $sessionStart -Encoding UTF8
   Read-Host 'Owner: after Capture and the post interval are complete, press Enter to stop ETW'
   $stopArgs = @('stop', $session, '-ets')
-  $stopCommand = "logman.exe stop `"$session`" -ets"
+  $stopCommand = "$logmanPath stop `"$session`" -ets"
   $stop = Invoke-LogmanStep $stopArgs
   if ($stop.exit_code -ne 0 -or $stop.text -notmatch '(?i)completed successfully') { throw 'logman stop trace failed' }
   $postQuery = Invoke-LogmanStep $queryArgs
@@ -217,6 +223,7 @@ try {
   # boundary. If the stop command itself exposes Stop Time, that raw control
   # output remains acceptable when a summary has no coverage labels; otherwise
   # the retained summary header must provide Log End Time.
+  # This path/version/hash must already have passed the owner tool-identity preflight in Section 4.1.
   $tracerpt = 'C:\Windows\System32\tracerpt.exe'
   New-Item -ItemType Directory -Path $probeDirectory -Force | Out-Null
   $probeOutput = @(& $tracerpt $etl -o $probeXml -of XML -lr -summary $tracerptSummary -y 2>&1)
@@ -332,8 +339,81 @@ hashed in the metadata; the parser reads and validates their raw output rather
 than accepting the metadata timestamps. If neither a raw `logman` `Stop Time`
 nor a `tracerpt` `Log End Time` is retained, the collection is blocked.
 
+### 4.1 Tool identity preflight (owner-controlled, fail-closed)
+
+The parser accepts only the exact source-pinned normalized tracerpt version
+`10.0.26100.1`, plus an owner-approved exact executable SHA-256. The supported
+`logman.exe` collector is also selected by an exact approved tuple: the full
+path, normalized four-part `FileVersion`, and exact SHA-256 are all retained in
+the identity record and must match the detached-CMS-approved manifest. No
+version family, PATH-resolved executable, or hash-family substitution is
+accepted for either tool; the parser's runtime version/hash gate is
+specifically for `tracerpt.exe` because replay does not invoke `logman.exe`.
+Normalize PowerShell `FileVersion` by trimming it and removing only a trailing
+parenthesized `WinBuild.<build>` label; then require a four-part numeric
+version. The owner approval manifest and detached CMS verification are private
+inputs to this preflight; the parser's `--tracerpt-sha256` value must be copied
+from that approved manifest, not discovered and approved by the probe itself.
+The approval record must contain `tracerpt_path`,
+`tracerpt_version_normalized`, `tracerpt_sha256`, `logman_path`,
+`logman_version_normalized`, and `logman_sha256`; all six values are checked
+against the files used by the owner run.
+
+```powershell
+$tracerptPath = 'C:\Windows\System32\tracerpt.exe'
+$logmanPath = 'C:\Windows\System32\logman.exe'
+$approvalPath = 'D:\owner-evidence\fx-t18\tracerpt-identity-approval.json'
+$identityPath = 'D:\owner-evidence\fx-t18\tracerpt-tool-identity.json'
+function Normalize-FileVersion([string]$Value) {
+  $normalized = [regex]::Replace($Value.Trim(), '(?i)\s*\(WinBuild\.[^)]*\)\s*$', '').Trim()
+  if ($normalized -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Unsupported FileVersion: $Value" }
+  return $normalized
+}
+$tracerptItem = Get-Item -LiteralPath $tracerptPath -ErrorAction Stop
+$logmanItem = Get-Item -LiteralPath $logmanPath -ErrorAction Stop
+$tracerptRawVersion = [string]$tracerptItem.VersionInfo.FileVersion
+$tracerptVersion = Normalize-FileVersion $tracerptRawVersion
+$logmanRawVersion = [string]$logmanItem.VersionInfo.FileVersion
+$logmanVersion = Normalize-FileVersion $logmanRawVersion
+$tracerptHash = (Get-FileHash -LiteralPath $tracerptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$logmanHash = (Get-FileHash -LiteralPath $logmanPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$approvalHash = (Get-FileHash -LiteralPath $approvalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$approval = Get-Content -LiteralPath $approvalPath -Raw | ConvertFrom-Json
+if ($approval.format -ne 'VOX_FX_T18_TRACERPT_IDENTITY_APPROVAL_V1' -or
+    $approval.owner_approved -ne $true -or
+    $approval.verification_method -ne 'owner_signed_detached_cms' -or
+    $approval.parser_toolchain_id -ne 'microsoft-windows-sdk-tracerpt-10.0.26100.1' -or
+    $approval.tracerpt_path -ine $tracerptPath -or
+    $approval.tracerpt_version_normalized -ne $tracerptVersion -or
+    $approval.tracerpt_sha256 -ine $tracerptHash -or
+    $approval.logman_path -ine $logmanPath -or
+    $approval.logman_version_normalized -ne $logmanVersion -or
+    $approval.logman_sha256 -ine $logmanHash) { throw 'logman/tracerpt identity is not owner-approved for this parser pin' }
+[ordered]@{
+  format = 'VOX_FX_T18_TRACERPT_TOOL_IDENTITY_V1'; path = $tracerptPath
+  file_version_raw = $tracerptRawVersion; file_version_normalized = $tracerptVersion
+  sha256 = $tracerptHash; logman_path = $logmanPath
+  logman_file_version_raw = $logmanRawVersion; logman_file_version_normalized = $logmanVersion
+  logman_sha256 = $logmanHash; parser_toolchain_id = $approval.parser_toolchain_id
+  approval_path = $approvalPath; approval_sha256 = $approvalHash
+} | ConvertTo-Json | Set-Content -Path $identityPath -Encoding UTF8
+```
+
+A prior owner-controlled preflight observed System32 `tracerpt.exe` and
+`logman.exe` as `10.0.26100.8875 (WinBuild.160101.0800)` and recorded tracerpt
+SHA-256 `aee3a047976f60e69357eb415d0d69b7b38325a55de67afa77d5b3fd5c28777b`.
+That normalizes to `10.0.26100.8875`, not the pinned `10.0.26100.1`, so it is
+an explicit compatibility block—not approval to broaden the parser pin or to
+run a patched executable. A future owner-approved tool change requires a
+separate source review and updated exact version/hash policy.
+
 The exact decoder command requests a separate `tracerpt -summary` artifact;
-`-lr` is the less-restrictive decoder option and is **not** a loss report:
+`-lr` is the less-restrictive decoder option and is **not** a loss report. The
+parser retains the normalized four-part Windows `FileVersion` and exact
+tracerpt SHA-256; production parsing requires the owner-approved hash supplied
+with `--tracerpt-sha256`. A parenthesized suffix such as `(WinBuild.160101.0800)`
+is removed only for normalization; version-family or hash-family matching is
+never accepted:
 
 ```powershell
 python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
@@ -342,11 +422,18 @@ python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
   --summary-output 'D:\owner-evidence\fx-t18\process-tracerpt-summary.txt' `
   --collection-metadata 'D:\owner-evidence\fx-t18\etw-collection-metadata.json' `
   --tracerpt 'C:\Windows\System32\tracerpt.exe' `
+  --tracerpt-sha256 'OWNER_APPROVED_EXACT_TRACERPT_SHA256' `
   --identity-join 'D:\owner-evidence\fx-t18\etw-identity-join.json'
 python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
   --verify-receipt --etl 'D:\owner-evidence\fx-t18\process.etl' `
   --receipt 'D:\owner-evidence\fx-t18\process-parse.json'
 ```
+
+Receipt replay is fail-closed: it requires the retained production
+`tool_sha256`, rehashes the exact tracerpt path recorded in the receipt, and
+rechecks both that hash and normalized `10.0.26100.1` before decoding. A real
+receipt without the owner-supplied expected hash, or with a changed executable,
+is not replayable.
 
 The parser source records the event source (Kernel-Process IDs 1/2), the
 explicit `tracerpt -summary` loss-counter source, summary path/hash, raw ETL
@@ -424,7 +511,78 @@ clean. Do not publish raw process names, paths, PIDs, command lines, or service
 names in public summaries; publish only approved counters, decisions,
 intervals, identity hashes, artifact hashes and sanitized diagnostics.
 
-## 5. Cleanup and retention
+## 5. Bounded CLI compatibility diagnostic (separate owner authorization)
+
+This is a recipe only; no command below is authorized by this branch. It is a
+narrow owner-local diagnostic for the observed `E_ACCESSDENIED` boundary, not a
+retry of the full capture. The owner must choose a disposable unique evidence
+folder, launch an already elevated Windows PowerShell Desktop 5.1 console as
+the intended diagnostic account, and record the effective identity and
+preflight before invoking `logman`. Do not elevate, restart, reconfigure, or
+change any of the four persistent runner services; do not use UAC automation,
+install a tool, change an account/group/ACL, run CTest, or invoke a DAW.
+
+The expected preflight is: the current identity is the owner-authorized
+account; the administrator/elevated-token check succeeds; `fltmc.exe` succeeds
+as a minimal effective-privilege probe; the unique output directory is empty;
+and the approved tool identity above is present. A failed preflight is retained
+as blocked evidence and must not be followed by a retry.
+
+If and only if the owner separately authorizes the probe, the bounded direct
+session recipe is:
+
+```powershell
+$probeRoot = 'D:\owner-evidence\fx-t18-cli-probe-' + [guid]::NewGuid().ToString('N')
+$session = 'VOX-FX-T18-CLI-' + [guid]::NewGuid().ToString('N')
+$etl = Join-Path $probeRoot 'compat.etl'
+$startLog = Join-Path $probeRoot 'start.log'
+$stopLog = Join-Path $probeRoot 'stop.log'
+$postLog = Join-Path $probeRoot 'post-stop-query.log'
+$identityLog = Join-Path $probeRoot 'effective-identity.txt'
+$logman = 'C:\Windows\System32\logman.exe'
+New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+$windowsIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$windowsPrincipal = New-Object Security.Principal.WindowsPrincipal($windowsIdentity)
+if (-not $windowsPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Effective token is not elevated' }
+whoami /all | Out-File -LiteralPath $identityLog -Encoding UTF8
+& 'C:\Windows\System32\fltmc.exe' 2>&1 | Out-File -LiteralPath ($probeRoot + '\fltmc.txt') -Encoding UTF8
+if ($LASTEXITCODE -ne 0) { throw 'Effective privilege preflight fltmc.exe failed' }
+$created = $false
+$createExit = -1
+$stopExit = -1
+$postExit = -1
+try {
+  $create = @(& $logman create trace $session -o $etl -f bin -max 16 -p '{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}' 0x10 5 -ets 2>&1)
+  $createExit = [int]$LASTEXITCODE
+  $create | Out-File -LiteralPath $startLog -Encoding UTF8
+  if ($createExit -ne 0) { throw "logman create failed with exit code $createExit" }
+  $created = $true
+  Start-Sleep -Seconds 2
+}
+finally {
+  # Direct -ets sessions have no persisted DCS to delete. Stop, then prove
+  # absence; retain both outputs even when access is denied.
+  $stop = @(& $logman stop $session -ets 2>&1)
+  $stopExit = [int]$LASTEXITCODE
+  $stop | Out-File -LiteralPath $stopLog -Encoding UTF8
+  $post = @(& $logman query $session -ets 2>&1)
+  $postExit = [int]$LASTEXITCODE
+  $post | Out-File -LiteralPath $postLog -Encoding UTF8
+}
+[ordered]@{ session = $session; created = $created; etl = $etl; start_exit = $createExit; stop_exit = $stopExit; post_query_exit = $postExit } |
+  ConvertTo-Json | Set-Content -Path (Join-Path $probeRoot 'probe-result.json') -Encoding UTF8
+# Owner verifies the retained post-stop output proves absence before any
+# private retention cleanup. No logman delete -ets is issued.
+```
+
+The owner records every exit code and raw output, including create/stop/query
+access-denied results, and independently reviews whether the post-stop query
+proves absence. The recipe must not be widened into a runner-service privilege
+change. Preserve the private probe directory until its hashes and retention
+status are recorded; only then may the owner remove this unique temporary
+folder under the separately controlled retention procedure.
+
+## 6. Cleanup and retention
 
 After the owner confirms the capture interval and final hashes, release the
 owner lease through the separately controlled owner procedure. Capture itself

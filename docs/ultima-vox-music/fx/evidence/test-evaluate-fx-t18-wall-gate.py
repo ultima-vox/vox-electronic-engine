@@ -678,6 +678,15 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as raw_directory:
         directory = Path(raw_directory)
         names: list[str] = []
+        assert EVALUATOR.ETL_PARSER._normalize_tool_version(
+            "10.0.26100.1 (WinBuild.160101.0800)") == "10.0.26100.1"
+        for invalid_version in ("10.0.26100", "10.0.26100.1 (OtherBuild.160101.0800)"):
+            try:
+                EVALUATOR.ETL_PARSER._normalize_tool_version(invalid_version)
+            except ValueError:
+                continue
+            raise AssertionError(f"unsupported tracerpt FileVersion unexpectedly normalized: {invalid_version}")
+        names.append("tracerpt_version_normalization_fail_closed")
 
         strict_witness, strict_manifest = strict_witness_fixture(directory / "strict-witness")
         base = datetime(2026, 11, 22, tzinfo=timezone.utc)

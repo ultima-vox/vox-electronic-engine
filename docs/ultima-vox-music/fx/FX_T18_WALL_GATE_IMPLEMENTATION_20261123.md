@@ -57,8 +57,12 @@ receipt is fabricated.
   bytes are also required. File count and rotation are independently measured
   from the retained ETL-directory inventory, then checked against the explicit
   single-file/zero-rotation policy; receipt/metadata constants alone cannot
-  establish them. Missing summary coverage may be derived only from the raw
-  control-time lines; owner JSON timestamps alone are rejected. A one-to-one
+  establish them. Tracerpt `FileVersion` is normalized only by removing a
+  trailing parenthesized `WinBuild` label, then compared exactly to the source
+  pin; production also requires an independently owner-approved exact
+  executable SHA-256 through `--tracerpt-sha256`. Missing summary coverage may
+  be derived only from the raw control-time lines; owner JSON timestamps alone
+  are rejected. A one-to-one
   `VOX_FX_T18_ETW_IDENTITY_JOIN_V1` artifact remains
   required for exact image hash and verified service/job ancestry; replay
   independently checks the raw ETL core digest, enriched event digest,
@@ -98,9 +102,18 @@ a zero-loss circular/wrapped trace, a short control interval, failed
 create/query control evidence, independently varying ETL inventories, and
 both applicable and inapplicable cleanup failures. Each blocks unless the
 retained raw control receipts prove the interval and lifecycle mode. The
-PowerShell smoke now extracts and parses the owner runbook's executable block
-and rejects unsupported `New-Item -LiteralPath` directory creation before any
-host action. The private inventory contract also requires canonical sample hashing plus
+PowerShell smoke now extracts and parses every fenced owner-runbook
+PowerShell block and rejects unsupported `New-Item -LiteralPath` directory
+creation before any host action. The runbook also documents exact tracerpt
+version normalization, owner-approved executable hash selection, the observed
+10.0.26100.8875-versus-10.0.26100.1 fail-closed mismatch, and a bounded
+owner-local diagnostic recipe with effective-privilege preflight and direct
+session stop/query cleanup; none authorizes service changes or execution from
+this branch. An owner-controlled compatibility attempt on `d72ad5d` reached
+preflight but `logman create trace ... -ets` failed before ETL creation with
+`0x80070005` (`E_ACCESSDENIED`); stop/query cleanup also returned `0x80300002`.
+No ETL was decoded and no positive witness was produced. The private inventory
+contract also requires canonical sample hashing plus
 measured full-host process/hash counts and a one-second cadence flag. These are
 source/fixture results only; no Windows
 PowerShell parse, real ETL replay, owner signature, or qualification has been
@@ -117,7 +130,7 @@ FX-T18 auditor negative fixtures: PASS
 
 PYTHONDONTWRITEBYTECODE=1 python3 docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 FX-T18 wall-gate executable fixtures: PASS
-fixtures: summary_without_control_receipt_blocked, circular_zero_loss_collection_blocked, wrapped_zero_loss_collection_blocked, independent_inventory_variation_blocked, short_control_interval_blocked, failed_control_receipt_blocked, inapplicable_delete_failure_blocked, applicable_delete_failure_blocked, applicable_delete_success_reconciled, collection_metadata_reconciliation, tracerpt_kernel_process_start_stop_shape, tracerpt_summary_metadata_and_wrapper_argv, etw_wmi_normalized_precision_and_offset_one_to_one, independent_etl_identity_join_ambiguous_block, etw_wmi_max_skew_block, etw_wmi_extra_event_block, etw_wmi_ambiguous_block, authorized_non_service_child_real_runner_chain, owner_baselined_non_runner_host_process, forged_runner_ancestry_rejected, unauthorized_private_raw_vs_approved_public, tampered_etl_regenerated_json_claims_blocked, two_phase_observation_finalization, tampered_observation_rejected, independent_host_attestations, fake_attestation_cannot_production_pass, etw_competitor_absent_from_wmi, mixed_name_same_pid_event, independent_owner_pin_mismatch, strict_policy_wildcard_path, strict_policy_missing_service_identity, strict_policy_missing_dynamic_authorization, strict_policy_deny_allow_conflict, strict_policy_wrong_executable, capture_sampler_global_monotonic_clock, coarse_cpu_plus_functional, all_profiles_unverified_provenance, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, functional_failure_then_truncation, absent_native_outcome, ctest_nonzero_unrelated, junit_failure_green_tsv, cpu_claim_unrelated_raw_junit, cpu_claim_mixed_raw_junit, cpu_claim_other_test_listing, cpu_claim_selected_executable_mismatch, mismatched_native_outcome, three_sample_witness, witness_missing_ctest_interval, preexisting_daw, other_runner_identity, manual_build_identity, daw_workload_identity, forged_policy_flag, nonlisted_build, forged_lease, missing_event_time_coverage, short_lived_competitor, dynamic_pid_reuse_mismatch, phase_ctest_mismatch, fixture_mode_qualification_prohibited, missing_owner_proof, forged_owner_signature, unverified_wmi_loss, missing_manifest_reconciliation
+fixtures: tracerpt_version_normalization_fail_closed, summary_without_control_receipt_blocked, circular_zero_loss_collection_blocked, wrapped_zero_loss_collection_blocked, independent_inventory_variation_blocked, short_control_interval_blocked, failed_control_receipt_blocked, inapplicable_delete_failure_blocked, applicable_delete_failure_blocked, applicable_delete_success_reconciled, collection_metadata_reconciliation, tracerpt_kernel_process_start_stop_shape, tracerpt_summary_metadata_and_wrapper_argv, etw_wmi_normalized_precision_and_offset_one_to_one, independent_etl_identity_join_ambiguous_block, etw_wmi_max_skew_block, etw_wmi_extra_event_block, etw_wmi_ambiguous_block, authorized_non_service_child_real_runner_chain, owner_baselined_non_runner_host_process, forged_runner_ancestry_rejected, unauthorized_private_raw_vs_approved_public, tampered_etl_regenerated_json_claims_blocked, two_phase_observation_finalization, tampered_observation_rejected, independent_host_attestations, fake_attestation_cannot_production_pass, etw_competitor_absent_from_wmi, mixed_name_same_pid_event, independent_owner_pin_mismatch, strict_policy_wildcard_path, strict_policy_missing_service_identity, strict_policy_missing_dynamic_authorization, strict_policy_deny_allow_conflict, strict_policy_wrong_executable, capture_sampler_global_monotonic_clock, coarse_cpu_plus_functional, all_profiles_unverified_provenance, functional_reason_mismatch, non8_voice_invariant, missing_functional_record, missing_rows_or_manifest, failed_iat_positive_control, observed_lock_wait, timeout_or_skip, observed_wall_then_crash, functional_failure_then_truncation, absent_native_outcome, ctest_nonzero_unrelated, junit_failure_green_tsv, cpu_claim_unrelated_raw_junit, cpu_claim_mixed_raw_junit, cpu_claim_other_test_listing, cpu_claim_selected_executable_mismatch, mismatched_native_outcome, three_sample_witness, witness_missing_ctest_interval, preexisting_daw, other_runner_identity, manual_build_identity, daw_workload_identity, forged_policy_flag, nonlisted_build, forged_lease, missing_event_time_coverage, short_lived_competitor, dynamic_pid_reuse_mismatch, phase_ctest_mismatch, fixture_mode_qualification_prohibited, missing_owner_proof, forged_owner_signature, unverified_wmi_loss, missing_manifest_reconciliation
 
 PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile docs/ultima-vox-music/fx/evidence/parse-fx-t18-etl.py docs/ultima-vox-music/fx/evidence/evaluate-fx-t18-wall-gate.py docs/ultima-vox-music/fx/evidence/finalize-fx-t18-host-witness.py docs/ultima-vox-music/fx/evidence/test-audit-fx-windows-timing.py docs/ultima-vox-music/fx/evidence/test-evaluate-fx-t18-wall-gate.py
 # exit 0; __pycache__ removed immediately afterward
