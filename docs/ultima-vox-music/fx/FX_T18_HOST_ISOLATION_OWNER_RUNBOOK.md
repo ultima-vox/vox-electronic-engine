@@ -70,7 +70,7 @@ PowerShell Desktop 5.1 and unique paths in the owner evidence store:
 ```powershell
 $observation = 'D:\owner-evidence\fx-t18\host-observation.json'
 $private = 'D:\owner-evidence\fx-t18\private-process-inventory.json'
-& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+& powershell.exe -NoLogo -NoProfile -NonInteractive `
   -File .\docs\ultima-vox-music\fx\evidence\capture-fx-t18-host-witness.ps1 `
   -Mode Capture -Phase Observe -OutputPath $observation `
   -IdentityPolicyPath 'D:\owner-evidence\fx-t18\identity-policy.json' `
@@ -97,14 +97,141 @@ After the observation exits, the owner independently parses the retained ETW
 collector. The pinned toolchain is Microsoft Windows SDK `tracerpt.exe`
 `10.0.26100.1`; record and verify the actual executable path and file version.
 Before parsing, collect the ETW session with an owner-retained start/stop
-record. Capture does not start or control this session. Use an elevated Windows
+record. Capture does not start or control this session. The mandatory order is:
+run the Section 4.1 tool-identity preflight first; only after it passes may the
+owner invoke the collector below, then the decoder. Use an elevated Windows
 PowerShell 5.1 prompt and a unique session name; the kernel-process keyword is
 selected explicitly and the session metadata is retained beside the ETL. The
 supported collector is the owner-approved exact
 `C:\Windows\System32\logman.exe`; invoke that absolute path rather than a
 PATH-resolved `logman.exe`. Its raw/normalized `FileVersion` and exact
 SHA-256 must be retained in the tool-identity record and bound to the same
-owner approval as the decoder:
+owner approval as the decoder. Run the mandatory Section 4.1 preflight below before executing this collector:
+
+### 4.1 Tool identity preflight (owner-controlled, fail-closed)
+
+The parser accepts only the exact source-pinned normalized tracerpt version
+`10.0.26100.1`, plus an owner-approved exact executable SHA-256. The supported
+`logman.exe` collector is also selected by an exact approved tuple: the full
+path, normalized four-part `FileVersion`, and exact SHA-256 are all retained in
+the identity record and must match the detached-CMS-approved manifest. No
+version family, PATH-resolved executable, or hash-family substitution is
+accepted for either tool; the parser's runtime version/hash gate is
+specifically for `tracerpt.exe` because replay does not invoke `logman.exe`.
+Normalize PowerShell `FileVersion` by trimming it and removing only a trailing
+parenthesized `WinBuild.<build>` label; then require a four-part numeric
+version.
+
+The JSON `owner_approved` flag and `verification_method` field are not
+cryptographic proof. Before this block, the owner must independently verify the
+approval JSON's detached CMS signature with the owner-controlled CMS verifier
+and retain a text verification receipt binding the approval JSON hash,
+signature hash, exact logman/tracerpt paths, normalized versions and SHA-256s.
+This PowerShell block deliberately does **not** verify CMS; it requires and
+hash-binds that already-verified receipt, then checks the actual files before
+any collector or decoder invocation. The parser's `--tracerpt-sha256` value
+must be copied from that independently verified manifest, never discovered and
+approved by the probe itself.
+The approval record must contain `tracerpt_path`,
+`tracerpt_version_normalized`, `tracerpt_sha256`, `logman_path`,
+`logman_version_normalized`, and `logman_sha256`; all six values are checked
+against the files used by the owner run.
+
+```powershell
+$tracerptPath = 'C:\Windows\System32\tracerpt.exe'
+$logmanPath = 'C:\Windows\System32\logman.exe'
+$approvalPath = 'D:\owner-evidence\fx-t18\tracerpt-identity-approval.json'
+$approvalSignaturePath = 'D:\owner-evidence\fx-t18\tracerpt-identity-approval.json.p7s'
+$approvalVerificationPath = 'D:\owner-evidence\fx-t18\tracerpt-identity-approval-verification.txt'
+$identityPath = 'D:\owner-evidence\fx-t18\tracerpt-tool-identity.json'
+function Normalize-FileVersion([string]$Value) {
+  $normalized = [regex]::Replace($Value.Trim(), '(?i)\s*\(WinBuild\.[^)]*\)\s*$', '').Trim()
+  if ($normalized -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Unsupported FileVersion: $Value" }
+  return $normalized
+}
+function Get-TrustedMicrosoftSignature([string]$Path) {
+  $signature = Get-AuthenticodeSignature -FilePath $Path
+  if ([string]$signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
+      [string]$signature.SignerCertificate.Subject -notmatch '(?i)Microsoft') {
+    throw "Authenticode signature is not a valid Microsoft signature: $Path"
+  }
+  return [ordered]@{
+    status = [string]$signature.Status
+    subject = [string]$signature.SignerCertificate.Subject
+    thumbprint = [string]$signature.SignerCertificate.Thumbprint
+  }
+}
+if (-not (Test-Path -LiteralPath $approvalPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $approvalSignaturePath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $approvalVerificationPath -PathType Leaf)) {
+  throw 'Approval JSON, detached CMS signature, and independent verification receipt are required'
+}
+$tracerptSignature = Get-TrustedMicrosoftSignature $tracerptPath
+$logmanSignature = Get-TrustedMicrosoftSignature $logmanPath
+$approvalHash = (Get-FileHash -LiteralPath $approvalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$approvalSignatureHash = (Get-FileHash -LiteralPath $approvalSignaturePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$approvalVerificationHash = (Get-FileHash -LiteralPath $approvalVerificationPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$verificationText = (Get-Content -LiteralPath $approvalVerificationPath -Raw).ToLowerInvariant()
+foreach ($binding in @(
+  "verified=true", "verification_method=owner_signed_detached_cms",
+  "approval_sha256=$approvalHash", "signature_sha256=$approvalSignatureHash")) {
+  # The receipt is trusted only because the owner verified it out-of-band; this
+  # check binds its retained hashes but does not perform CMS verification.
+  $bindingText = $binding.ToLowerInvariant()
+  if ($verificationText -notmatch ('(?m)^\s*' + [regex]::Escape($bindingText) + '\s*$')) {
+    throw "Independent approval verification receipt lacks $binding"
+  }
+}
+$tracerptItem = Get-Item -LiteralPath $tracerptPath -ErrorAction Stop
+$logmanItem = Get-Item -LiteralPath $logmanPath -ErrorAction Stop
+$tracerptRawVersion = [string]$tracerptItem.VersionInfo.FileVersion
+$tracerptVersion = Normalize-FileVersion $tracerptRawVersion
+$logmanRawVersion = [string]$logmanItem.VersionInfo.FileVersion
+$logmanVersion = Normalize-FileVersion $logmanRawVersion
+$tracerptHash = (Get-FileHash -LiteralPath $tracerptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$logmanHash = (Get-FileHash -LiteralPath $logmanPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($tracerptVersion -ne '10.0.26100.1') { throw "Production tracerpt version is not the exact pinned 10.0.26100.1: $tracerptVersion" }
+foreach ($binding in @(
+  "tracerpt_path=$tracerptPath", "tracerpt_version_normalized=$tracerptVersion",
+  "tracerpt_sha256=$tracerptHash", "logman_path=$logmanPath",
+  "logman_version_normalized=$logmanVersion", "logman_sha256=$logmanHash")) {
+  $bindingText = $binding.ToLowerInvariant()
+  if ($verificationText -notmatch ('(?m)^\s*' + [regex]::Escape($bindingText) + '\s*$')) {
+    throw "Independent approval verification receipt lacks $binding"
+  }
+}
+$approval = Get-Content -LiteralPath $approvalPath -Raw | ConvertFrom-Json
+if ($approval.format -ne 'VOX_FX_T18_TRACERPT_IDENTITY_APPROVAL_V1' -or
+    $approval.owner_approved -ne $true -or
+    $approval.verification_method -ne 'owner_signed_detached_cms' -or
+    $approval.parser_toolchain_id -ne 'microsoft-windows-sdk-tracerpt-10.0.26100.1' -or
+    $approval.tracerpt_path -ine $tracerptPath -or
+    $approval.tracerpt_version_normalized -ne $tracerptVersion -or
+    $approval.tracerpt_sha256 -ine $tracerptHash -or
+    $approval.logman_path -ine $logmanPath -or
+    $approval.logman_version_normalized -ne $logmanVersion -or
+    $approval.logman_sha256 -ine $logmanHash) { throw 'logman/tracerpt identity is not owner-approved for this parser pin' }
+[ordered]@{
+  format = 'VOX_FX_T18_TRACERPT_TOOL_IDENTITY_V1'; path = $tracerptPath
+  file_version_raw = $tracerptRawVersion; file_version_normalized = $tracerptVersion
+  sha256 = $tracerptHash; logman_path = $logmanPath
+  logman_file_version_raw = $logmanRawVersion; logman_file_version_normalized = $logmanVersion
+  logman_sha256 = $logmanHash; parser_toolchain_id = $approval.parser_toolchain_id
+  tracerpt_signature = $tracerptSignature; logman_signature = $logmanSignature
+  approval_path = $approvalPath; approval_sha256 = $approvalHash
+  approval_signature_path = $approvalSignaturePath; approval_signature_sha256 = $approvalSignatureHash
+  approval_verification_path = $approvalVerificationPath; approval_verification_sha256 = $approvalVerificationHash
+  cms_verification_performed_by_this_block = $false
+} | ConvertTo-Json | Set-Content -Path $identityPath -Encoding UTF8
+```
+
+A prior owner-controlled preflight observed System32 `tracerpt.exe` and
+`logman.exe` as `10.0.26100.8875 (WinBuild.160101.0800)` and recorded tracerpt
+SHA-256 `aee3a047976f60e69357eb415d0d69b7b38325a55de67afa77d5b3fd5c28777b`.
+That normalizes to `10.0.26100.8875`, not the pinned `10.0.26100.1`, so it is
+an explicit compatibility block—not approval to broaden the parser pin or to
+run a patched executable. A future owner-approved tool change requires a
+separate source review and updated exact version/hash policy.
 
 ```powershell
 $session = 'VOX-FX-T18-KernelProcess-' + [guid]::NewGuid().ToString('N')
@@ -339,73 +466,7 @@ hashed in the metadata; the parser reads and validates their raw output rather
 than accepting the metadata timestamps. If neither a raw `logman` `Stop Time`
 nor a `tracerpt` `Log End Time` is retained, the collection is blocked.
 
-### 4.1 Tool identity preflight (owner-controlled, fail-closed)
-
-The parser accepts only the exact source-pinned normalized tracerpt version
-`10.0.26100.1`, plus an owner-approved exact executable SHA-256. The supported
-`logman.exe` collector is also selected by an exact approved tuple: the full
-path, normalized four-part `FileVersion`, and exact SHA-256 are all retained in
-the identity record and must match the detached-CMS-approved manifest. No
-version family, PATH-resolved executable, or hash-family substitution is
-accepted for either tool; the parser's runtime version/hash gate is
-specifically for `tracerpt.exe` because replay does not invoke `logman.exe`.
-Normalize PowerShell `FileVersion` by trimming it and removing only a trailing
-parenthesized `WinBuild.<build>` label; then require a four-part numeric
-version. The owner approval manifest and detached CMS verification are private
-inputs to this preflight; the parser's `--tracerpt-sha256` value must be copied
-from that approved manifest, not discovered and approved by the probe itself.
-The approval record must contain `tracerpt_path`,
-`tracerpt_version_normalized`, `tracerpt_sha256`, `logman_path`,
-`logman_version_normalized`, and `logman_sha256`; all six values are checked
-against the files used by the owner run.
-
-```powershell
-$tracerptPath = 'C:\Windows\System32\tracerpt.exe'
-$logmanPath = 'C:\Windows\System32\logman.exe'
-$approvalPath = 'D:\owner-evidence\fx-t18\tracerpt-identity-approval.json'
-$identityPath = 'D:\owner-evidence\fx-t18\tracerpt-tool-identity.json'
-function Normalize-FileVersion([string]$Value) {
-  $normalized = [regex]::Replace($Value.Trim(), '(?i)\s*\(WinBuild\.[^)]*\)\s*$', '').Trim()
-  if ($normalized -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Unsupported FileVersion: $Value" }
-  return $normalized
-}
-$tracerptItem = Get-Item -LiteralPath $tracerptPath -ErrorAction Stop
-$logmanItem = Get-Item -LiteralPath $logmanPath -ErrorAction Stop
-$tracerptRawVersion = [string]$tracerptItem.VersionInfo.FileVersion
-$tracerptVersion = Normalize-FileVersion $tracerptRawVersion
-$logmanRawVersion = [string]$logmanItem.VersionInfo.FileVersion
-$logmanVersion = Normalize-FileVersion $logmanRawVersion
-$tracerptHash = (Get-FileHash -LiteralPath $tracerptPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$logmanHash = (Get-FileHash -LiteralPath $logmanPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$approvalHash = (Get-FileHash -LiteralPath $approvalPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$approval = Get-Content -LiteralPath $approvalPath -Raw | ConvertFrom-Json
-if ($approval.format -ne 'VOX_FX_T18_TRACERPT_IDENTITY_APPROVAL_V1' -or
-    $approval.owner_approved -ne $true -or
-    $approval.verification_method -ne 'owner_signed_detached_cms' -or
-    $approval.parser_toolchain_id -ne 'microsoft-windows-sdk-tracerpt-10.0.26100.1' -or
-    $approval.tracerpt_path -ine $tracerptPath -or
-    $approval.tracerpt_version_normalized -ne $tracerptVersion -or
-    $approval.tracerpt_sha256 -ine $tracerptHash -or
-    $approval.logman_path -ine $logmanPath -or
-    $approval.logman_version_normalized -ne $logmanVersion -or
-    $approval.logman_sha256 -ine $logmanHash) { throw 'logman/tracerpt identity is not owner-approved for this parser pin' }
-[ordered]@{
-  format = 'VOX_FX_T18_TRACERPT_TOOL_IDENTITY_V1'; path = $tracerptPath
-  file_version_raw = $tracerptRawVersion; file_version_normalized = $tracerptVersion
-  sha256 = $tracerptHash; logman_path = $logmanPath
-  logman_file_version_raw = $logmanRawVersion; logman_file_version_normalized = $logmanVersion
-  logman_sha256 = $logmanHash; parser_toolchain_id = $approval.parser_toolchain_id
-  approval_path = $approvalPath; approval_sha256 = $approvalHash
-} | ConvertTo-Json | Set-Content -Path $identityPath -Encoding UTF8
-```
-
-A prior owner-controlled preflight observed System32 `tracerpt.exe` and
-`logman.exe` as `10.0.26100.8875 (WinBuild.160101.0800)` and recorded tracerpt
-SHA-256 `aee3a047976f60e69357eb415d0d69b7b38325a55de67afa77d5b3fd5c28777b`.
-That normalizes to `10.0.26100.8875`, not the pinned `10.0.26100.1`, so it is
-an explicit compatibility block—not approval to broaden the parser pin or to
-run a patched executable. A future owner-approved tool change requires a
-separate source review and updated exact version/hash policy.
+### 4.2 Decode and replay
 
 The exact decoder command requests a separate `tracerpt -summary` artifact;
 `-lr` is the less-restrictive decoder option and is **not** a loss report. The
@@ -423,17 +484,21 @@ python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
   --collection-metadata 'D:\owner-evidence\fx-t18\etw-collection-metadata.json' `
   --tracerpt 'C:\Windows\System32\tracerpt.exe' `
   --tracerpt-sha256 'OWNER_APPROVED_EXACT_TRACERPT_SHA256' `
+  --tracerpt-approval 'D:\owner-evidence\fx-t18\tracerpt-identity-approval.json' `
+  --tracerpt-approval-signature 'D:\owner-evidence\fx-t18\tracerpt-identity-approval.json.p7s' `
+  --tracerpt-approval-verification 'D:\owner-evidence\fx-t18\tracerpt-identity-approval-verification.txt' `
   --identity-join 'D:\owner-evidence\fx-t18\etw-identity-join.json'
 python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
-  --verify-receipt --etl 'D:\owner-evidence\fx-t18\process.etl' `
-  --receipt 'D:\owner-evidence\fx-t18\process-parse.json'
+  --etl 'D:\owner-evidence\fx-t18\process.etl' `
+  --verify-receipt 'D:\owner-evidence\fx-t18\process-parse.json'
 ```
 
 Receipt replay is fail-closed: it requires the retained production
-`tool_sha256`, rehashes the exact tracerpt path recorded in the receipt, and
-rechecks both that hash and normalized `10.0.26100.1` before decoding. A real
-receipt without the owner-supplied expected hash, or with a changed executable,
-is not replayable.
+`tool_sha256`, rehashes the exact tracerpt path and external approval
+JSON/signature/verification receipt recorded in the receipt, and rechecks both
+that trusted tuple and normalized `10.0.26100.1` before decoding. A real receipt
+without the owner-supplied expected hash and authenticated approval provenance,
+or with a changed executable, is not replayable.
 
 The parser source records the event source (Kernel-Process IDs 1/2), the
 explicit `tracerpt -summary` loss-counter source, summary path/hash, raw ETL
@@ -513,74 +578,107 @@ intervals, identity hashes, artifact hashes and sanitized diagnostics.
 
 ## 5. Bounded CLI compatibility diagnostic (separate owner authorization)
 
-This is a recipe only; no command below is authorized by this branch. It is a
-narrow owner-local diagnostic for the observed `E_ACCESSDENIED` boundary, not a
-retry of the full capture. The owner must choose a disposable unique evidence
-folder, launch an already elevated Windows PowerShell Desktop 5.1 console as
-the intended diagnostic account, and record the effective identity and
-preflight before invoking `logman`. Do not elevate, restart, reconfigure, or
-change any of the four persistent runner services; do not use UAC automation,
-install a tool, change an account/group/ACL, run CTest, or invoke a DAW.
+The production contract remains fail-closed at tracerpt `10.0.26100.1`; the
+measured System32 `10.0.26100.8875` executable is not production approval.
+For the compatibility question only, use the parameterized
+`evidence/diagnose-fx-t18-tracerpt-compatibility.ps1` script. It is a bounded
+owner-local diagnostic, not a collector retry or qualification route. It runs
+only from an already elevated Windows PowerShell Desktop 5.1 console, checks
+the exact System32 paths, normalized versions, exact bytes, valid Microsoft
+Authenticode signatures, and the independently verified detached-CMS approval
+receipt **before** invoking either `logman.exe` or `tracerpt.exe`.
 
-The expected preflight is: the current identity is the owner-authorized
-account; the administrator/elevated-token check succeeds; `fltmc.exe` succeeds
-as a minimal effective-privilege probe; the unique output directory is empty;
-and the approved tool identity above is present. A failed preflight is retained
-as blocked evidence and must not be followed by a retry.
+The detached-CMS verification receipt is an authenticated owner input created
+outside this script. The diagnostic approval JSON must be a separate
+`VOX_FX_T18_TRACERPT_COMPATIBILITY_APPROVAL_V1` record with
+`diagnostic_only=true` and `qualification_prohibited=true`; it must not reuse
+the production `10.0.26100.1` approval as a production tuple. The script
+records the approval/signature/verification-receipt hashes and binds that
+receipt to the actual path/version/hash tuple, but deliberately does not claim
+to verify CMS itself. Its required private receipt fields are:
 
-If and only if the owner separately authorizes the probe, the bounded direct
-session recipe is:
-
-```powershell
-$probeRoot = 'D:\owner-evidence\fx-t18-cli-probe-' + [guid]::NewGuid().ToString('N')
-$session = 'VOX-FX-T18-CLI-' + [guid]::NewGuid().ToString('N')
-$etl = Join-Path $probeRoot 'compat.etl'
-$startLog = Join-Path $probeRoot 'start.log'
-$stopLog = Join-Path $probeRoot 'stop.log'
-$postLog = Join-Path $probeRoot 'post-stop-query.log'
-$identityLog = Join-Path $probeRoot 'effective-identity.txt'
-$logman = 'C:\Windows\System32\logman.exe'
-New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
-$windowsIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$windowsPrincipal = New-Object Security.Principal.WindowsPrincipal($windowsIdentity)
-if (-not $windowsPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Effective token is not elevated' }
-whoami /all | Out-File -LiteralPath $identityLog -Encoding UTF8
-& 'C:\Windows\System32\fltmc.exe' 2>&1 | Out-File -LiteralPath ($probeRoot + '\fltmc.txt') -Encoding UTF8
-if ($LASTEXITCODE -ne 0) { throw 'Effective privilege preflight fltmc.exe failed' }
-$created = $false
-$createExit = -1
-$stopExit = -1
-$postExit = -1
-try {
-  $create = @(& $logman create trace $session -o $etl -f bin -max 16 -p '{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}' 0x10 5 -ets 2>&1)
-  $createExit = [int]$LASTEXITCODE
-  $create | Out-File -LiteralPath $startLog -Encoding UTF8
-  if ($createExit -ne 0) { throw "logman create failed with exit code $createExit" }
-  $created = $true
-  Start-Sleep -Seconds 2
-}
-finally {
-  # Direct -ets sessions have no persisted DCS to delete. Stop, then prove
-  # absence; retain both outputs even when access is denied.
-  $stop = @(& $logman stop $session -ets 2>&1)
-  $stopExit = [int]$LASTEXITCODE
-  $stop | Out-File -LiteralPath $stopLog -Encoding UTF8
-  $post = @(& $logman query $session -ets 2>&1)
-  $postExit = [int]$LASTEXITCODE
-  $post | Out-File -LiteralPath $postLog -Encoding UTF8
-}
-[ordered]@{ session = $session; created = $created; etl = $etl; start_exit = $createExit; stop_exit = $stopExit; post_query_exit = $postExit } |
-  ConvertTo-Json | Set-Content -Path (Join-Path $probeRoot 'probe-result.json') -Encoding UTF8
-# Owner verifies the retained post-stop output proves absence before any
-# private retention cleanup. No logman delete -ets is issued.
+```
+verified=true
+verification_method=owner_signed_detached_cms
+approval_sha256=<approval-json-sha256>
+signature_sha256=<approval-p7s-sha256>
+tracerpt_path=C:\Windows\System32\tracerpt.exe
+tracerpt_version_normalized=10.0.26100.8875
+tracerpt_sha256=aee3a047976f60e69357eb415d0d69b7b38325a55de67afa77d5b3fd5c28777b
+logman_path=C:\Windows\System32\logman.exe
+logman_version_normalized=10.0.26100.8875
+logman_sha256=<owner-approved-logman-sha256>
 ```
 
-The owner records every exit code and raw output, including create/stop/query
-access-denied results, and independently reviews whether the post-stop query
-proves absence. The recipe must not be widened into a runner-service privilege
-change. Preserve the private probe directory until its hashes and retention
-status are recorded; only then may the owner remove this unique temporary
-folder under the separately controlled retention procedure.
+The owner must choose a new empty private output directory and separately
+verify the approval JSON's detached signature before starting. No UAC
+automation, execution-policy bypass, service/account/group/ACL change, tool
+installation, retry, CTest, DAW, or runner-service reconfiguration is allowed.
+The controlled workload is only a short-lived System32 `timeout.exe` process;
+its process name and PID stay in private raw receipts and are not emitted in
+the sanitized summary. The diagnostic also requires a measurable local output
+drive with at least 64 MiB free before creating the bounded 16 MiB ETL.
+
+Run the diagnostic once as follows:
+
+```powershell
+$diagnosticRoot = 'D:\owner-evidence\fx-t18\tracerpt-compat-' + [guid]::NewGuid().ToString('N')
+$approval = 'D:\owner-evidence\fx-t18\tracerpt-compatibility-approval.json'
+$approvalSignature = 'D:\owner-evidence\fx-t18\tracerpt-compatibility-approval.json.p7s'
+$approvalVerification = 'D:\owner-evidence\fx-t18\tracerpt-compatibility-approval-verification.txt'
+& powershell.exe -NoLogo -NoProfile -NonInteractive `
+  -File .\docs\ultima-vox-music\fx\evidence\diagnose-fx-t18-tracerpt-compatibility.ps1 `
+  -OutputRoot $diagnosticRoot `
+  -ToolApprovalPath $approval `
+  -ToolApprovalSignaturePath $approvalSignature `
+  -ApprovalVerificationReceiptPath $approvalVerification `
+  -Python 'python' `
+  -TracerptPath 'C:\Windows\System32\tracerpt.exe' `
+  -LogmanPath 'C:\Windows\System32\logman.exe' `
+  -ExpectedTracerptVersion '10.0.26100.8875' `
+  -ExpectedTracerptSha256 'aee3a047976f60e69357eb415d0d69b7b38325a55de67afa77d5b3fd5c28777b' `
+  -ExpectedLogmanVersion '10.0.26100.8875' `
+  -ObservationSeconds 3 `
+  -ExpectedSignerSubject 'Microsoft'
+$diagnosticExit = $LASTEXITCODE
+```
+
+Exit `0` means only that the bounded compatibility artifacts were produced;
+it is not `WALL_GATE_PASS`, qualification, or approval of the installed build.
+Exit `2` is blocked evidence. The script never invokes production parsing with
+an unsupported version and never creates a production parse receipt. Instead,
+it invokes the installed, signature-checked System32 decoder exactly once to
+retain private `tracerpt-output.xml`, `tracerpt-summary.txt`, and raw decoder
+console output, then invokes the production parser's diagnostic-only XML/
+summary path:
+
+```powershell
+python .\docs\ultima-vox-music\fx\evidence\parse-fx-t18-etl.py `
+  --etl "$diagnosticRoot\compat.etl" `
+  --diagnostic-decoded-xml "$diagnosticRoot\tracerpt-output.xml" `
+  --diagnostic-summary "$diagnosticRoot\tracerpt-summary.txt" `
+  --diagnostic-output "$diagnosticRoot\diagnostic-parser.json"
+```
+
+The script performs that parser invocation itself; the command above documents
+the exact field/counter test and is not a second decoder run. The
+parser diagnostic applies the production XML/summary field shape, process
+start/stop reconciliation, `Events Lost`, `Buffers Lost`, coverage and logger
+metadata parsing. It emits only a sanitized counter/shape report with
+`qualification_prohibited=true`. A missing XML/summary, malformed field,
+nonzero loss counter, failed active query, failed stop, or unproven post-stop
+absence remains blocked and must not be retried.
+
+Private artifacts retained under `$diagnosticRoot` include `preflight.json`,
+effective-token/privilege output, create/active-query/stop/post-stop-query
+receipts, the controlled-process receipt, ETL, decoder XML/summary and raw
+console output, parser diagnostic output, and `diagnostic-summary.json`.
+The summary contains tool versions/hashes/signature status, exit codes,
+ETL-file/rotation/truncation results, parser counters and only the sanitized
+controlled-process label. No `logman delete -ets` is issued for this direct
+transient session; the stop and absence query are retained. Preserve the
+private directory until its hashes and retention status are recorded, then
+remove it only under the separately controlled owner retention procedure.
 
 ## 6. Cleanup and retention
 

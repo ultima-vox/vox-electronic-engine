@@ -201,7 +201,8 @@ Collection is a separate owner-controlled step using exactly
 normalized four-part `FileVersion` plus exact SHA-256 must match the same
 owner-approved detached-CMS tool-identity record. Replay does not invoke
 `logman.exe`; it rehashes and version-checks the exact `tracerpt.exe` path from
-the parse provenance and requires the approved `--tracerpt-sha256` value that
+the parse provenance, revalidates the retained approval JSON/signature/
+verification receipt, and requires the approved `--tracerpt-sha256` value that
 was supplied when the real receipt was created.
 
 The parser trims the Windows `FileVersion` and removes only a trailing
@@ -211,7 +212,10 @@ process. The owner must independently approve the full executable path,
 normalized version, and SHA-256, then pass that exact hash to the parser. The
 source pin remains `10.0.26100.1` until a separately reviewed toolchain change
 updates it. A preflight reporting `10.0.26100.8875` is therefore blocked even
-if its file hash is recorded.
+if its file hash is recorded. The separate compatibility diagnostic may decode
+that exact signed System32 build into private XML/summary artifacts and apply
+the parser's diagnostic-only field/counter path, but it cannot create a
+production receipt or qualify the host.
 
 The parser consumes `Microsoft-Windows-Kernel-Process` process event IDs 1
 (ProcessStart) and 2 (ProcessStop). A stop XML record may omit image and parent
@@ -223,7 +227,8 @@ loss counters and trace metadata come from the separately requested retained
 `Log End Time`, and `Logger Name`/session), not stdout/stderr or a JSON claim.
 A receipt records the raw ETL SHA-256, summary path/SHA-256, retained
 `VOX_FX_T18_ETW_COLLECTION_METADATA_V1` path/SHA-256, parser/toolchain name
-and version, executable path, exact tracerpt argv, derived coverage/session
+and version, executable path, exact tracerpt argv, the owner-verified approval
+JSON/signature/verification-receipt paths and hashes, derived coverage/session
 source, event source, counter source, decoded digests, identity-join artifact
 hash, and replay command. Production caller arguments cannot supply coverage or
 session metadata. The collection metadata is valid only when its hashed
@@ -253,7 +258,8 @@ owner-authored metadata timestamps alone never supply coverage.
 The production parser requires an owner-private
 `VOX_FX_T18_ETW_IDENTITY_JOIN_V1` join for the path/hash/service/ancestry facts
 that are not historical fields in the raw Kernel-Process event. `verify_receipt`
-reruns the decoder against the retained raw bytes, reapplies the retained join,
+rehashes the retained owner-verified approval inputs and actual pinned decoder,
+then reruns the decoder against the retained raw bytes, reapplies the retained join,
 revalidates the hashed control receipts and compares the raw core digest,
 complete enriched event digest and counters before the wall evaluator accepts
 the signed receipt. The join and both control receipts are included in the host
@@ -270,10 +276,13 @@ python evidence/parse-fx-t18-etl.py --etl D:\\owner-evidence\\fx-t18\\process.et
   --collection-metadata D:\\owner-evidence\\fx-t18\\etw-collection-metadata.json \\
   --tracerpt C:\\Windows\\System32\\tracerpt.exe \\
   --tracerpt-sha256 OWNER_APPROVED_EXACT_TRACERPT_SHA256 \\
+  --tracerpt-approval D:\\owner-evidence\\fx-t18\\tracerpt-identity-approval.json \\
+  --tracerpt-approval-signature D:\\owner-evidence\\fx-t18\\tracerpt-identity-approval.json.p7s \\
+  --tracerpt-approval-verification D:\\owner-evidence\\fx-t18\\tracerpt-identity-approval-verification.txt \\
   --identity-join D:\\owner-evidence\\fx-t18\\etw-identity-join.json
-python evidence/parse-fx-t18-etl.py --verify-receipt \\
+python evidence/parse-fx-t18-etl.py \\
   --etl D:\\owner-evidence\\fx-t18\\process.etl \\
-  --receipt D:\\owner-evidence\\fx-t18\\process-parse.json
+  --verify-receipt D:\\owner-evidence\\fx-t18\\process-parse.json
 ```
 
 A regenerated JSON receipt for tampered ETL is not sufficient: replay binds

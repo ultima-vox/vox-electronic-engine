@@ -688,6 +688,97 @@ def main() -> int:
             raise AssertionError(f"unsupported tracerpt FileVersion unexpectedly normalized: {invalid_version}")
         names.append("tracerpt_version_normalization_fail_closed")
 
+        approval_dir = directory / "tracerpt-approval"
+        approval_dir.mkdir()
+        approved_tool = approval_dir / "tracerpt.exe"
+        approved_tool.write_bytes(b"owner-approved pinned decoder bytes")
+        approved_signature = approval_dir / "tracerpt.exe.p7s"
+        approved_signature.write_bytes(b"detached CMS signature bytes")
+        approved_verification = approval_dir / "verification.txt"
+        approved_tool_hash = hashlib.sha256(approved_tool.read_bytes()).hexdigest()
+        approved_signature_hash = hashlib.sha256(approved_signature.read_bytes()).hexdigest()
+        approval = approval_dir / "approval.json"
+        approval.write_text(json.dumps({
+            "format": "VOX_FX_T18_TRACERPT_IDENTITY_APPROVAL_V1",
+            "owner_approved": True,
+            "verification_method": "owner_signed_detached_cms",
+            "parser_toolchain_id": EVALUATOR.ETL_PARSER.TOOLCHAIN_ID,
+            "tracerpt_path": str(approved_tool.resolve()),
+            "tracerpt_version_normalized": EVALUATOR.ETL_PARSER.PINNED_TRACERPT_VERSION,
+            "tracerpt_sha256": approved_tool_hash,
+        }), encoding="utf-8")
+        approval_hash = hashlib.sha256(approval.read_bytes()).hexdigest()
+        approved_verification.write_text(
+            "verified=true\nverification_method=owner_signed_detached_cms\n"
+            f"approval_sha256={approval_hash}\n"
+            f"signature_sha256={approved_signature_hash}\n"
+            f"tracerpt_path={approved_tool.resolve()}\n"
+            f"tracerpt_version_normalized={EVALUATOR.ETL_PARSER.PINNED_TRACERPT_VERSION}\n"
+            f"tracerpt_sha256={approved_tool_hash}\n", encoding="utf-8")
+        approval_provenance = EVALUATOR.ETL_PARSER._read_tracerpt_approval(
+            approval, approved_signature, approved_verification, approved_tool,
+            EVALUATOR.ETL_PARSER.PINNED_TRACERPT_VERSION, approved_tool_hash)
+        assert approval_provenance["tool_approval_trust"] == "owner_verified_detached_cms_receipt"
+        names.append("tracerpt_approval_provenance_binding")
+
+        compatibility_dir = directory / "compatibility-cli"
+        compatibility_dir.mkdir()
+        compatibility_raw = compatibility_dir / "compatibility.etl"
+        compatibility_raw.write_bytes(b"diagnostic-only retained raw ETL placeholder")
+        compatibility_xml = compatibility_dir / "compatibility.xml"
+        compatibility_xml.write_text(
+            """<Events xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\">
+  <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>1</EventID><TimeCreated SystemTime=\"2026-11-25T10:00:01.0000000Z\"/></System><EventData><Data Name=\"ProcessId\">1234</Data><Data Name=\"ParentId\">100</Data><Data Name=\"ImageName\">timeout.exe</Data><Data Name=\"CreateTime\">2026-11-25T10:00:01.0000000Z</Data></EventData></Event>
+  <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>2</EventID><TimeCreated SystemTime=\"2026-11-25T10:00:02.0000000Z\"/></System><EventData><Data Name=\"ProcessId\">1234</Data><Data Name=\"ParentId\">100</Data><Data Name=\"ImageName\">timeout.exe</Data><Data Name=\"CreateTime\">2026-11-25T10:00:01.0000000Z</Data></EventData></Event>
+</Events>""", encoding="utf-8")
+        compatibility_summary = compatibility_dir / "compatibility-summary.txt"
+        compatibility_summary.write_text(
+            "Events Lost: 0\nBuffers Lost: 0\n"
+            "Log Start Time: 2026-11-25T10:00:00.0000000Z\n"
+            "Log End Time: 2026-11-25T10:00:03.0000000Z\n"
+            "Logger Name: VOX-FX-T18-COMPAT\n", encoding="utf-8")
+        compatibility_output = compatibility_dir / "compatibility-diagnostic.json"
+        diagnostic_cli = subprocess.run([
+            sys.executable, str(HERE / "parse-fx-t18-etl.py"),
+            "--etl", str(compatibility_raw),
+            "--diagnostic-decoded-xml", str(compatibility_xml),
+            "--diagnostic-summary", str(compatibility_summary),
+            "--diagnostic-output", str(compatibility_output),
+        ], check=False, capture_output=True, text=True)
+        if diagnostic_cli.returncode != 0:
+            raise AssertionError(f"compatibility diagnostic CLI failed: {diagnostic_cli.stderr}")
+        diagnostic_value = json.loads(compatibility_output.read_text(encoding="utf-8"))
+        if (diagnostic_value.get("events_received") != 2
+                or diagnostic_value.get("lost_events") != 0
+                or diagnostic_value.get("buffer_loss_events") != 0
+                or diagnostic_value.get("qualification_prohibited") is not True):
+            raise AssertionError(f"compatibility diagnostic fields/counters were not reconciled: {diagnostic_value}")
+        names.append("tracerpt_compatibility_diagnostic_parser")
+
+        replay_raw = directory / "replay-cli-fixture.json"
+        replay_base = datetime(2026, 11, 25, tzinfo=timezone.utc)
+        replay_raw.write_text(json.dumps({
+            "format": "VOX_FX_T18_RAW_ETL_FIXTURE_V1",
+            "provider": "Microsoft-Windows-Kernel-Process/ETW",
+            "counters": {"lost_events": 0, "buffer_loss_events": 0},
+            "process_events": [
+                approved_fixture_event(replay_base, "start", "2026-11-25T10:00:01.0000000Z"),
+                approved_fixture_event(replay_base, "stop", "2026-11-25T10:00:02.0000000Z"),
+            ],
+        }), encoding="utf-8")
+        replay_receipt = directory / "replay-cli-fixture.parse.json"
+        create_cli = subprocess.run([
+            sys.executable, str(HERE / "parse-fx-t18-etl.py"),
+            "--etl", str(replay_raw), "--fixture-raw", "--output", str(replay_receipt),
+        ], check=False, capture_output=True, text=True)
+        verify_cli = subprocess.run([
+            sys.executable, str(HERE / "parse-fx-t18-etl.py"),
+            "--etl", str(replay_raw), "--fixture-raw", "--verify-receipt", str(replay_receipt),
+        ], check=False, capture_output=True, text=True)
+        if create_cli.returncode != 0 or verify_cli.returncode != 0:
+            raise AssertionError(f"documented parse replay argv failed: {create_cli.stderr} {verify_cli.stderr}")
+        names.append("parse_receipt_cli_replay_syntax")
+
         strict_witness, strict_manifest = strict_witness_fixture(directory / "strict-witness")
         base = datetime(2026, 11, 22, tzinfo=timezone.utc)
         intervals = {

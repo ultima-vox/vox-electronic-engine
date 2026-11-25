@@ -5,8 +5,9 @@ The production path is deliberately a thin, reproducible wrapper around the
 pinned Microsoft Windows SDK ``tracerpt.exe`` tool.  Capture never creates a
 parse receipt and an owner-signed JSON claim is not a parser.  The wrapper
 records the raw ETL hash, the exact tracerpt path/normalized version/SHA-256/command,
-where the SHA-256 is supplied as an owner-approved expected identity, and the
-retained ``tracerpt -summary`` artifact that supplies loss counters and
+where the SHA-256 is supplied as an owner-approved expected identity and bound
+to an independently verified approval JSON/signature/verification receipt, and
+the retained ``tracerpt -summary`` artifact that supplies loss counters and
 trace metadata, plus retained collection metadata whose hashed start/stop
 control receipts prove the bounded noncircular logger, and digests of both the
 raw ETW core and the enriched identity-joined event stream. Production parsing
@@ -20,7 +21,11 @@ The ``--fixture-raw`` path is only for offline conformance tests.  It uses a
 JSON representation of the tracerpt event/counter result, is marked
 qualification-prohibited, and exercises the same raw-byte hash and replay
 checks.  It is not a substitute for a Windows ETL or a genuine tracerpt XML
-and summary artifact.
+and summary artifact. ``--diagnostic-decoded-xml`` plus
+``--diagnostic-summary`` is a separate compatibility-only path: it applies the
+production XML/summary field and counter parser to retained outputs from an
+owner-verified decoder, but never creates a production receipt or relaxes the
+pinned version/hash gate.
 """
 from __future__ import annotations
 
@@ -38,7 +43,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 FORMAT = "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
-PARSER_VERSION = "1.4.0"
+PARSER_VERSION = "1.5.0"
 PROVIDER = "Microsoft-Windows-Kernel-Process/ETW"
 PROVIDER_GUID = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716"
 PROCESS_PROVIDER_NAMES = {
@@ -342,6 +347,78 @@ def _tool_version(executable: Path) -> str:
     return _normalize_tool_version(version)
 
 
+def _same_windows_path(left: Any, right: Any) -> bool:
+    return str(left).replace("\\", "/").casefold() == str(right).replace("\\", "/").casefold()
+
+
+def _verification_receipt_has(text: str, key: str, expected: Any) -> bool:
+    pattern = re.compile(
+        r"(?im)^\s*" + re.escape(key) + r"\s*=\s*" +
+        re.escape(str(expected)) + r"\s*$")
+    return pattern.search(text) is not None
+
+
+def _read_tracerpt_approval(approval_path: Path | None,
+                            signature_path: Path | None,
+                            verification_path: Path | None,
+                            tool_path: Path,
+                            tool_version: str,
+                            tool_hash: str) -> dict[str, Any]:
+    """Bind a production decoder to an owner-verified approval input.
+
+    CMS verification is intentionally external to this parser. The retained
+    verification receipt is trusted owner input; this function verifies its
+    hash and exact key/value bindings, then reconciles the actual executable
+    bytes to the approved manifest. A JSON owner_approved flag is never used
+    as cryptographic proof by itself.
+    """
+    if approval_path is None or signature_path is None or verification_path is None:
+        raise ValueError("production ETW parsing requires the approved tracerpt JSON, detached signature, and CMS verification receipt")
+    approval = approval_path.resolve()
+    signature = signature_path.resolve()
+    verification = verification_path.resolve()
+    if not approval.is_file() or not signature.is_file() or not verification.is_file():
+        raise ValueError("tracerpt approval, detached signature, or independent verification receipt is missing")
+    approval_hash = sha256(approval)
+    signature_hash = sha256(signature)
+    verification_hash = sha256(verification)
+    value = read_json(approval)
+    if (value.get("format") != "VOX_FX_T18_TRACERPT_IDENTITY_APPROVAL_V1"
+            or value.get("owner_approved") is not True
+            or value.get("verification_method") != "owner_signed_detached_cms"
+            or value.get("parser_toolchain_id") != TOOLCHAIN_ID):
+        raise ValueError("tracerpt approval manifest is not the signed production toolchain record")
+    if (not _same_windows_path(value.get("tracerpt_path"), tool_path.resolve())
+            or value.get("tracerpt_version_normalized") != tool_version
+            or str(value.get("tracerpt_sha256", "")).casefold() != tool_hash.casefold()
+            or tool_version != PINNED_TRACERPT_VERSION
+            or not SHA256_RE.fullmatch(str(value.get("tracerpt_sha256", "")))):
+        raise ValueError("approved tracerpt path/version/hash does not bind the actual pinned executable")
+    receipt_text = _read_summary_text(verification).casefold()
+    expected_bindings = {
+        "verified": "true",
+        "verification_method": "owner_signed_detached_cms",
+        "approval_sha256": approval_hash,
+        "signature_sha256": signature_hash,
+        "tracerpt_path": str(tool_path.resolve()),
+        "tracerpt_version_normalized": tool_version,
+        "tracerpt_sha256": tool_hash,
+    }
+    if any(not _verification_receipt_has(receipt_text, key.casefold(), str(expected).casefold())
+           for key, expected in expected_bindings.items()):
+        raise ValueError("independent tracerpt CMS verification receipt does not bind the approved executable")
+    return {
+        "tool_approval_path": str(approval),
+        "tool_approval_sha256": approval_hash,
+        "tool_approval_signature_path": str(signature),
+        "tool_approval_signature_sha256": signature_hash,
+        "tool_approval_verification_path": str(verification),
+        "tool_approval_verification_sha256": verification_hash,
+        "tool_approval_trust": "owner_verified_detached_cms_receipt",
+        "tool_approval_cms_verified_by_parser": False,
+    }
+
+
 def _data_value(event: ET.Element, names: set[str]) -> str | None:
     wanted = {name.casefold() for name in names}
     for node in event.iter():
@@ -634,6 +711,44 @@ def _parse_xml(decoded: Path, summary: str) -> tuple[list[dict[str, Any]], dict[
             raise ValueError("tracerpt events fall outside the independently derived summary coverage")
     metadata["events_received"] = len(events)
     return events, metadata
+
+
+def make_compatibility_diagnostic(decoded_xml: Path, summary_path: Path) -> dict[str, Any]:
+    """Apply production XML/summary parsing without creating a production receipt.
+
+    This mode is for a separately authorized decoder-compatibility probe. The
+    caller must have already run the exact decoder and independently recorded
+    its identity. It deliberately emits only counters, event-shape results and
+    artifact hashes; it never applies a production toolchain exception.
+    """
+    if not decoded_xml.is_file() or not summary_path.is_file():
+        raise ValueError("compatibility diagnostic requires retained decoder XML and summary artifacts")
+    summary = _read_summary_text(summary_path)
+    events, counters = _parse_xml(decoded_xml, summary)
+    starts = sum(1 for event in events if event["event"] == "start")
+    stops = sum(1 for event in events if event["event"] == "stop")
+    return {
+        "format": "VOX_FX_T18_TRACERPT_COMPATIBILITY_DIAGNOSTIC_V1",
+        "parser_name": "vox-fx-t18-raw-etl-verifier",
+        "parser_version": PARSER_VERSION,
+        "diagnostic_only": True,
+        "qualification_prohibited": True,
+        "production_receipt_created": False,
+        "decoded_xml_sha256": sha256(decoded_xml),
+        "summary_sha256": sha256(summary_path),
+        "process_event_shape_valid": True,
+        "process_start_events": starts,
+        "process_stop_events": stops,
+        "events_received": counters["events_received"],
+        "lost_events": counters["lost_events"],
+        "buffer_loss_events": counters["buffer_loss_events"],
+        "coverage_start_utc": counters.get("coverage_start_utc"),
+        "coverage_end_utc": counters.get("coverage_end_utc"),
+        "session_name_present": bool(counters.get("session_name")),
+        "counter_source": LOSS_SOURCE,
+        "event_source": EVENT_SOURCE,
+        "production_version_pin": PINNED_TRACERPT_VERSION,
+    }
 
 
 def _collection_value(value: dict[str, Any], *names: str) -> Any:
@@ -1216,12 +1331,16 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
                  coverage_end: str | None = None, session_name: str | None = None,
                  fixture: bool = False, tracerpt_path: Path | None = None,
                  tracerpt_sha256: str | None = None,
+                 tracerpt_approval_path: Path | None = None,
+                 tracerpt_approval_signature_path: Path | None = None,
+                 tracerpt_approval_verification_path: Path | None = None,
                  identity_join_path: Path | None = None,
                  summary_path: Path | None = None,
                  collection_metadata_path: Path | None = None) -> dict[str, Any]:
     if not raw_path.is_file():
         raise ValueError(f"raw ETL is missing: {raw_path}")
     join_path: Path | None = None
+    tool_approval: dict[str, Any] = {}
     if fixture:
         raw_events, counters, tool_version = _fixture_result(raw_path)
         events = raw_events
@@ -1248,8 +1367,22 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
         tool = tracerpt_path or Path(os.environ.get("FX_T18_TRACERPT", "tracerpt.exe"))
         if not isinstance(tracerpt_sha256, str) or not SHA256_RE.fullmatch(tracerpt_sha256):
             raise ValueError("production ETW parsing requires the owner-approved tracerpt executable SHA-256")
+        resolved_tool = tool.resolve()
+        if not resolved_tool.is_file():
+            raise ValueError(f"pinned tracerpt executable is missing: {resolved_tool}")
+        preflight_tool_version = _tool_version(resolved_tool)
+        preflight_tool_hash = sha256(resolved_tool)
+        if (preflight_tool_version != PINNED_TRACERPT_VERSION
+                or preflight_tool_hash.casefold() != tracerpt_sha256.casefold()):
+            raise ValueError("tracerpt executable failed the pinned version/hash preflight")
+        tool_approval = _read_tracerpt_approval(
+            tracerpt_approval_path, tracerpt_approval_signature_path,
+            tracerpt_approval_verification_path, resolved_tool,
+            preflight_tool_version, preflight_tool_hash)
         raw_events, counters, tool_version, tool_hash, command_argv = _run_tracerpt(
-            raw_path, tool, summary_path, collection_metadata_path, tracerpt_sha256)
+            raw_path, resolved_tool, summary_path, collection_metadata_path, tracerpt_sha256)
+        if tool_version != preflight_tool_version or tool_hash.casefold() != preflight_tool_hash.casefold():
+            raise ValueError("tracerpt identity changed between preflight and decode")
         tool_name = command_argv[0]
         if identity_join_path is None:
             raise ValueError("production ETW parsing requires a retained identity join artifact")
@@ -1283,7 +1416,7 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
         "decoded_core_event_digest": core_event_digest(raw_events),
         "decoded_event_digest": full_digest,
         "provenance": "owner-independent replay of retained raw ETL bytes",
-        "replay": "python parse-fx-t18-etl.py --verify-receipt --etl <raw-etl> --receipt <parse.json>",
+        "replay": "python parse-fx-t18-etl.py --etl <raw-etl> --verify-receipt <parse.json>",
         "fixture_mode": fixture,
     }
     if not fixture:
@@ -1293,6 +1426,7 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
             "collection_metadata_path": str(collection_metadata_path.resolve()),
             "collection_metadata_sha256": sha256(collection_metadata_path.resolve()),
         })
+        provenance.update(tool_approval)
     if join_path is not None:
         provenance.update({
             "identity_join_format": "VOX_FX_T18_ETW_IDENTITY_JOIN_V1",
@@ -1355,6 +1489,24 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
         raise ValueError("ETW parse receipt command line is not a canonical argument vector") from error
     if not fixture and not SHA256_RE.fullmatch(provenance["tool_sha256"]):
         raise ValueError("production ETW parse receipt lacks a trusted tracerpt executable SHA-256")
+    if not fixture:
+        approval_fields = (
+            "tool_approval_path", "tool_approval_sha256",
+            "tool_approval_signature_path", "tool_approval_signature_sha256",
+            "tool_approval_verification_path", "tool_approval_verification_sha256",
+            "tool_approval_trust",
+        )
+        if any(not isinstance(provenance.get(field), str) or not provenance[field]
+               for field in approval_fields):
+            raise ValueError("production ETW parse receipt lacks its authenticated tracerpt approval provenance")
+        for field in ("tool_approval_sha256", "tool_approval_signature_sha256",
+                      "tool_approval_verification_sha256"):
+            if not SHA256_RE.fullmatch(provenance[field]):
+                raise ValueError(f"production ETW parse receipt has an invalid {field}")
+        if provenance.get("tool_approval_trust") != "owner_verified_detached_cms_receipt":
+            raise ValueError("production ETW parse receipt lacks an owner-verified tracerpt approval input")
+        if provenance.get("tool_approval_cms_verified_by_parser") is not False:
+            raise ValueError("production ETW parser must not claim to verify detached CMS")
     if not fixture:
         argv = provenance["command_argv"]
         if "-summary" not in argv or "-lr" not in argv or "--identity-join" in argv:
@@ -1420,14 +1572,29 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
             "session_name": receipt.get("session_name"),
         })
     else:
-        tool = Path(provenance.get("tool", "tracerpt.exe"))
+        tool = Path(provenance.get("tool", "tracerpt.exe")).resolve()
         collection_path = Path(str(provenance.get("collection_metadata_path", "")))
+        if not tool.is_file():
+            raise ValueError(f"pinned tracerpt executable is missing: {tool}")
+        preflight_tool_version = _tool_version(tool)
+        preflight_tool_hash = sha256(tool)
+        if (preflight_tool_version != provenance["tool_version"]
+                or preflight_tool_hash.casefold() != provenance["tool_sha256"].casefold()):
+            raise ValueError("tracerpt executable failed the replay version/hash preflight")
+        replay_approval = _read_tracerpt_approval(
+            Path(provenance["tool_approval_path"]),
+            Path(provenance["tool_approval_signature_path"]),
+            Path(provenance["tool_approval_verification_path"]),
+            tool, preflight_tool_version, preflight_tool_hash)
+        for field, value in replay_approval.items():
+            if provenance.get(field) != value:
+                raise ValueError("replayed tracerpt approval provenance does not reconcile")
         replay_events, replay_counters, replay_tool_version, replay_tool_hash, _ = _run_tracerpt(
             raw_path, tool, collection_metadata_path=collection_path,
             expected_tool_sha256=provenance["tool_sha256"])
-        if (replay_tool_version != provenance["tool_version"]
-                or replay_tool_hash.casefold() != provenance["tool_sha256"].casefold()):
-            raise ValueError("replayed tracerpt executable identity does not reconcile to parser provenance")
+        if (replay_tool_version != preflight_tool_version
+                or replay_tool_hash.casefold() != preflight_tool_hash.casefold()):
+            raise ValueError("replayed tracerpt executable identity changed after preflight")
         join_path_value = provenance.get("identity_join_path")
         join_hash = provenance.get("identity_join_sha256")
         if (provenance.get("identity_join_format") != "VOX_FX_T18_ETW_IDENTITY_JOIN_V1"
@@ -1463,6 +1630,12 @@ def main() -> int:
     parser.add_argument("--session-name", help="fixture-only declared metadata; production derives this from tracerpt -summary")
     parser.add_argument("--tracerpt", type=Path)
     parser.add_argument("--tracerpt-sha256", help="owner-approved exact SHA-256 for the production tracerpt executable")
+    parser.add_argument("--tracerpt-approval", type=Path,
+                        help="owner-verified production tracerpt approval JSON")
+    parser.add_argument("--tracerpt-approval-signature", type=Path,
+                        help="detached CMS signature for --tracerpt-approval")
+    parser.add_argument("--tracerpt-approval-verification", type=Path,
+                        help="independent owner CMS verification receipt for --tracerpt-approval")
     parser.add_argument("--summary-output", type=Path,
                         help="retained tracerpt -summary artifact; production defaults beside --output")
     parser.add_argument("--collection-metadata", type=Path,
@@ -1471,9 +1644,22 @@ def main() -> int:
                         help="owner-retained ETW identity join JSON required for production parsing")
     parser.add_argument("--fixture-raw", action="store_true")
     parser.add_argument("--verify-receipt", type=Path)
+    parser.add_argument("--diagnostic-decoded-xml", type=Path,
+                        help="diagnostic-only retained tracerpt XML; never creates a production receipt")
+    parser.add_argument("--diagnostic-summary", type=Path,
+                        help="diagnostic-only retained tracerpt -summary artifact")
+    parser.add_argument("--diagnostic-output", type=Path,
+                        help="diagnostic-only sanitized parser-field/counter JSON")
     args = parser.parse_args()
     try:
-        if args.verify_receipt:
+        diagnostic_args = (args.diagnostic_decoded_xml, args.diagnostic_summary, args.diagnostic_output)
+        if any(value is not None for value in diagnostic_args):
+            if any(value is None for value in diagnostic_args) or args.fixture_raw or args.verify_receipt:
+                parser.error("diagnostic mode requires XML, summary and output, without fixture/replay mode")
+            diagnostic = make_compatibility_diagnostic(args.diagnostic_decoded_xml, args.diagnostic_summary)
+            args.diagnostic_output.write_text(json.dumps(diagnostic, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            print("FX-T18 tracerpt compatibility diagnostic: PASS")
+        elif args.verify_receipt:
             verify_receipt(args.etl, read_json(args.verify_receipt), fixture=args.fixture_raw)
             print("FX-T18 raw ETL replay: PASS")
         else:
@@ -1486,6 +1672,9 @@ def main() -> int:
                                    args.session_name, fixture=args.fixture_raw,
                                    tracerpt_path=args.tracerpt,
                                    tracerpt_sha256=args.tracerpt_sha256,
+                                   tracerpt_approval_path=args.tracerpt_approval,
+                                   tracerpt_approval_signature_path=args.tracerpt_approval_signature,
+                                   tracerpt_approval_verification_path=args.tracerpt_approval_verification,
                                    identity_join_path=args.identity_join,
                                    summary_path=summary_path,
                                    collection_metadata_path=args.collection_metadata)

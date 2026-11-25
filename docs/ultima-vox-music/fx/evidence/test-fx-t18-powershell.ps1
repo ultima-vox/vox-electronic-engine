@@ -25,6 +25,7 @@ $path = (Resolve-Path -LiteralPath $OrchestratorPath).Path
 $helperPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'FxT18CtestHelpers.ps1')).Path
 $auditScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'audit-fx-windows-timing.py')).Path
 $witnessScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'capture-fx-t18-host-witness.ps1')).Path
+$diagnosticScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'diagnose-fx-t18-tracerpt-compatibility.ps1')).Path
 $ownerRunbookPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\FX_T18_HOST_ISOLATION_OWNER_RUNBOOK.md')).Path
 
 function Assert-PowerShellParses([string]$File) {
@@ -39,12 +40,22 @@ function Assert-PowerShellParses([string]$File) {
 Assert-PowerShellParses $path
 Assert-PowerShellParses $helperPath
 Assert-PowerShellParses $witnessScript
+Assert-PowerShellParses $diagnosticScript
 . $helperPath
 
 $tempRoot = Join-Path $env:TEMP "vox-fx-t18-powershell-$PID"
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 try {
     $ownerRunbookSource = Get-Content -LiteralPath $ownerRunbookPath -Raw
+    $diagnosticSource = Get-Content -LiteralPath $diagnosticScript -Raw
+    if ($diagnosticSource -match '(?im)logman\s+delete|ExecutionPolicy\s+Bypass|Start-Sleep' -or
+        $diagnosticSource -notmatch '(?i)Get-AuthenticodeSignature' -or
+        $diagnosticSource -notmatch '(?i)diagnostic-decoded-xml|diagnostic-summary' -or
+        $diagnosticSource -notmatch '10\.0\.26100\.8875' -or
+        $diagnosticSource -notmatch 'aee3a047976f60e69357eb415d0d69b7b38325a55de67afa77d5b3fd5c28777b' -or
+        $diagnosticSource -notmatch '(?i)permanently bounded') {
+        throw 'FX-T18 compatibility diagnostic violates the exact tuple or bounded no-bypass/no-retry contract'
+    }
     $unsupportedOwnerRunbookParameters = [regex]::Matches(
         $ownerRunbookSource, '(?im)^\s*New-Item\b[^\r\n]*-LiteralPath\b')
     if ($unsupportedOwnerRunbookParameters.Count -ne 0) {
