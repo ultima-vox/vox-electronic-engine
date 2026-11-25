@@ -1,0 +1,230 @@
+name: FX-T18 one-shot ETW CLI compatibility probe (d72ad5d)
+
+on:
+  push:
+    branches:
+      - ci/fx-t18-etw-cli-probe-d72ad5d-20261125
+    paths:
+      - .github/workflows/fx-t18-etw-cli-probe-d72ad5d.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fx-t18-etw-cli-probe-d72ad5d-20261125
+  cancel-in-progress: false
+
+jobs:
+  etw-cli-probe:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v4
+        with:
+          ref: d72ad5da757453b2d01905afb93ea52060e20388
+          persist-credentials: false
+
+      - name: One bounded diagnostic session; sanitized evidence only
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:COMPUTERNAME -cne 'HAMUNAPTRA' -or @('1','2','3','4') -cnotcontains [string]$env:RUNNER_NAME) { throw 'Unexpected host or runner' }
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Windows PowerShell 5.1 required' }
+          if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'One-shot authorization; no reruns' }
+          $head = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne 'd72ad5da757453b2d01905afb93ea52060e20388') { throw 'Unexpected HEAD' }
+          $tree = (& git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $tree -cne 'b580128c40282b99c6482c29fd17e89517396477') { throw 'Unexpected tree' }
+          $dirty = @(& git status --porcelain=v1 --untracked-files=all | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Unclean checkout' }
+          $root = (Get-Location).Path
+          $parser = Join-Path $root 'docs/ultima-vox-music/fx/evidence/parse-fx-t18-etl.py'
+          $runbook = Join-Path $root 'docs/ultima-vox-music/fx/FX_T18_HOST_ISOLATION_OWNER_RUNBOOK.md'
+          $out = Join-Path $root 'fx-t18-etw-cli-evidence'
+          New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+          $raw = Join-Path $env:RUNNER_TEMP ('fx-t18-etw-cli-' + [guid]::NewGuid().ToString('N'))
+          $session = 'VOX-FX-T18-CLI-' + [guid]::NewGuid().ToString('N')
+          $etl = Join-Path $raw 'probe.etl'
+          $xml = Join-Path $raw 'decoded.xml'
+          $summary = Join-Path $raw 'summary.txt'
+          $logman = Join-Path $env:SystemRoot 'System32/logman.exe'
+          $tracerpt = Join-Path $env:SystemRoot 'System32/tracerpt.exe'
+          $receipt = [ordered]@{
+            format = 'FX_T18_ETW_CLI_PROBE_V1'
+            qualification = 'NOT_GRANTED'
+            source_head = $head; source_tree = $tree
+            runner = $env:RUNNER_NAME; host = $env:COMPUTERNAME; powershell = $PSVersionTable.PSVersion.ToString()
+            run_id = $env:GITHUB_RUN_ID; workflow_sha = $env:GITHUB_SHA
+            parser_sha256 = (Get-FileHash -LiteralPath $parser -Algorithm SHA256).Hash.ToLowerInvariant()
+            runbook_sha256 = (Get-FileHash -LiteralPath $runbook -Algorithm SHA256).Hash.ToLowerInvariant()
+            started_utc = [DateTime]::UtcNow.ToString('o')
+            provider_guid = '{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}'; keyword = '0x10'; level = 5
+            mode = 'bin'; max_file_mib = 4096; requested_probe_seconds = 3
+            build_executed = $false; ctest_executed = $false; owner_capture_executed = $false
+            raw_process_data_uploaded = $false
+            create_attempted = $false; cleanup_verified = $false
+            stage = 'preflight'; status = 'BLOCKED'
+          }
+          function Invoke-PrivateNative([string]$Executable, [string[]]$Arguments) {
+            $old = $ErrorActionPreference
+            try {
+              $ErrorActionPreference = 'Continue'
+              $lines = @(& $Executable @Arguments 2>&1)
+              $code = [int]$LASTEXITCODE
+              [pscustomobject]@{ code = $code; text = (($lines | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) }
+            } finally { $ErrorActionPreference = $old }
+          }
+          function Test-Absent($Result) {
+            return ($Result.code -ne 0 -and $Result.text -match '(?i)not found|does not exist|cannot find|no such')
+          }
+          function Get-QueryFlags([string]$Text) {
+            [ordered]@{
+              running_label = [bool]($Text -match '(?im)status\s*:\s*running')
+              provider_guid = [bool]($Text -match [regex]::Escape($receipt.provider_guid))
+              provider_name = [bool]($Text -match '(?im)microsoft-windows-kernel-process')
+              keyword = [bool]($Text -match '(?im)^\s*keywords?(?:\s*all|\s*any)?\s*[:=]\s*0x10\b')
+              level = [bool]($Text -match '(?im)(?:level|verbosity)\s*[:=]\s*5\b')
+              log_mode = [bool]($Text -match '(?im)log\s+mode\s*[:=]\s*(?:sequential|file|normal)\b')
+              circular = [bool]($Text -match '(?i)bincirc|circular')
+              max_size = [bool]($Text -match '(?im)maximum\s+file\s+size\s*[:=]\s*4096\b')
+              start_time_label = [bool]($Text -match '(?im)^\s*start time\s*[:=]')
+            }
+          }
+          $created = $false
+          $stopped = $false
+          try {
+            New-Item -ItemType Directory -Path $raw -ErrorAction Stop | Out-Null
+            $drive = New-Object System.IO.DriveInfo([System.IO.Path]::GetPathRoot($raw))
+            if ($drive.AvailableFreeSpace -lt (4608L * 1MB)) { throw 'capacity_preflight_failed' }
+            $receipt.free_capacity_preflight = $true
+            $receipt.logman_version = (Get-Item -LiteralPath $logman).VersionInfo.FileVersion
+            $receipt.tracerpt_version = (Get-Item -LiteralPath $tracerpt).VersionInfo.FileVersion
+            $receipt.pinned_tracerpt_match = ($receipt.tracerpt_version -ceq '10.0.26100.1')
+            $receipt.tracerpt_sha256 = (Get-FileHash -LiteralPath $tracerpt -Algorithm SHA256).Hash.ToLowerInvariant()
+            $receipt.logman_sha256 = (Get-FileHash -LiteralPath $logman -Algorithm SHA256).Hash.ToLowerInvariant()
+            $blocks = [regex]::Matches((Get-Content -LiteralPath $runbook -Raw), '(?s)```powershell\r?\n(?<code>.*?)\r?\n```')
+            $bad = 0; $collectorBlocks = 0
+            foreach ($block in $blocks) {
+              $tokens = $null; $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseInput($block.Groups['code'].Value,[ref]$tokens,[ref]$errors) | Out-Null
+              if (@($errors).Count -ne 0) { $bad++ }
+              if ($block.Groups['code'].Value -match 'Invoke-LogmanStep') { $collectorBlocks++ }
+            }
+            $receipt.runbook_blocks = $blocks.Count; $receipt.runbook_parse_errors = $bad; $receipt.collector_blocks = $collectorBlocks
+            if ($bad -ne 0 -or $collectorBlocks -ne 1) { throw 'runbook_parse_preflight_failed' }
+            $receipt.stage = 'create'
+            $receipt.create_attempted = $true
+            $start = Invoke-PrivateNative $logman @('create','trace',$session,'-o',$etl,'-f','bin','-max','4096','-p',$receipt.provider_guid,'0x10','5','-ets')
+            $receipt.create_exit = $start.code
+            if ($start.code -ne 0) { throw 'logman_create_failed' }
+            $created = $true
+            $receipt.stage = 'query'
+            $query = Invoke-PrivateNative $logman @('query',$session,'-ets')
+            $receipt.query_exit = $query.code; $receipt.query_flags = Get-QueryFlags $query.text
+            if ($query.code -ne 0) { throw 'logman_query_failed' }
+            $receipt.stage = 'controlled_process'
+            $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32/cmd.exe') -ArgumentList @('/d','/c','exit','0') -WindowStyle Hidden -Wait -PassThru
+            $receipt.test_process_exit = $child.ExitCode
+            $pidForCheck = [int]$child.Id
+            Start-Sleep -Seconds 3
+            $receipt.stage = 'stop'
+            $stop = Invoke-PrivateNative $logman @('stop',$session,'-ets')
+            $receipt.stop_exit = $stop.code
+            if ($stop.code -ne 0) { throw 'logman_stop_failed' }
+            $stopped = $true
+            $post = Invoke-PrivateNative $logman @('query',$session,'-ets')
+            $receipt.post_stop_query_exit = $post.code
+            $receipt.cleanup_verified = Test-Absent $post
+            if (-not $receipt.cleanup_verified) { throw 'session_absence_not_verified' }
+            $receipt.stage = 'decode'
+            $files = @(Get-ChildItem -LiteralPath $raw -File | Where-Object { $_.Extension -ieq '.etl' -or $_.Name.StartsWith('probe.etl.',[StringComparison]::OrdinalIgnoreCase) })
+            $receipt.etl_file_count = $files.Count
+            if ($files.Count -ne 1 -or -not (Test-Path -LiteralPath $etl -PathType Leaf)) { throw 'etl_inventory_mismatch' }
+            $receipt.etl_bytes = (Get-Item -LiteralPath $etl).Length
+            if ($receipt.etl_bytes -le 0 -or $receipt.etl_bytes -ge (4096L * 1MB)) { throw 'etl_empty_or_capacity_reached' }
+            $receipt.etl_sha256 = (Get-FileHash -LiteralPath $etl -Algorithm SHA256).Hash.ToLowerInvariant()
+            $decoded = Invoke-PrivateNative $tracerpt @($etl,'-o',$xml,'-of','XML','-lr','-summary',$summary,'-y')
+            $receipt.tracerpt_exit = $decoded.code
+            if ($decoded.code -ne 0 -or -not (Test-Path -LiteralPath $xml) -or -not (Test-Path -LiteralPath $summary)) { throw 'tracerpt_decode_failed' }
+            $receipt.xml_sha256 = (Get-FileHash -LiteralPath $xml -Algorithm SHA256).Hash.ToLowerInvariant()
+            $receipt.summary_sha256 = (Get-FileHash -LiteralPath $summary -Algorithm SHA256).Hash.ToLowerInvariant()
+            $receipt.stage = 'parser'
+            $py = Join-Path $raw 'check.py'
+            @'
+          import importlib.util, json, sys
+          from pathlib import Path
+          parser, xml, summary, target_pid, output = sys.argv[1:]
+          spec = importlib.util.spec_from_file_location("pinned_etl_parser", parser)
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          result = {"summary_parsed": False, "events_parsed": False}
+          try:
+              summary_text = m._read_summary_text(Path(summary))
+              counters = m._parse_tracerpt_summary(summary_text)
+              result["summary_parsed"] = True
+              result["lost_events"] = counters["lost_events"]
+              result["buffer_loss_events"] = counters["buffer_loss_events"]
+              result["summary_has_start"] = bool(counters.get("coverage_start_utc"))
+              result["summary_has_end"] = bool(counters.get("coverage_end_utc"))
+              result["summary_has_session"] = bool(counters.get("session_name"))
+          except Exception as exc:
+              result["summary_error_type"] = type(exc).__name__
+              result["summary_missing_loss_counters"] = "counters are absent" in str(exc)
+          try:
+              events, metadata = m._parse_xml(Path(xml), m._read_summary_text(Path(summary)))
+              result["events_parsed"] = True
+              result["process_event_count"] = len(events)
+              result["test_process_start"] = any(e.get("pid") == int(target_pid) and e.get("event") == "start" for e in events)
+              result["test_process_stop"] = any(e.get("pid") == int(target_pid) and e.get("event") == "stop" for e in events)
+          except Exception as exc:
+              result["event_error_type"] = type(exc).__name__
+              result["event_missing_creation_time"] = "lacks CreateTime" in str(exc)
+              result["event_missing_start_fields"] = "lacks ImageName or ParentProcessID" in str(exc)
+              result["event_unmatched_stop"] = "no matching start identity" in str(exc)
+          Path(output).write_text(json.dumps(result, indent=2), encoding="utf-8")
+          '@ | Set-Content -LiteralPath $py -Encoding UTF8
+            $parserResult = Join-Path $out 'parser-check.json'
+            $r = Invoke-PrivateNative (Get-Command python.exe -ErrorAction Stop).Source @('-B',$py,$parser,$xml,$summary,[string]$pidForCheck,$parserResult)
+            $receipt.python_exit = $r.code
+            if ($r.code -ne 0 -or -not (Test-Path -LiteralPath $parserResult)) { throw 'python_parser_probe_failed' }
+            $p = Get-Content -LiteralPath $parserResult -Raw | ConvertFrom-Json
+            $flags = $receipt.query_flags
+            $queryCompatible = ($flags.running_label -and $flags.provider_guid -and $flags.provider_name -and $flags.keyword -and $flags.level -and $flags.log_mode -and -not $flags.circular -and $flags.max_size -and $flags.start_time_label)
+            $receipt.runbook_query_compatible = $queryCompatible
+            $receipt.status = if ($receipt.pinned_tracerpt_match -and $queryCompatible -and $p.summary_parsed -and $p.events_parsed -and $p.lost_events -eq 0 -and $p.buffer_loss_events -eq 0 -and $p.test_process_start -and $p.test_process_stop -and $receipt.test_process_exit -eq 0) { 'PASS_CLI_PROBE_ONLY' } else { 'BLOCKED_COMPATIBILITY' }
+            $receipt.stage = 'finished'
+          } catch {
+            $receipt.failure_stage = $receipt.stage
+            # Exception messages can include host paths and raw provider data.
+            $receipt.failure_type = $_.Exception.GetType().Name
+          } finally {
+            if ($receipt.create_attempted -and -not $receipt.cleanup_verified) {
+              try {
+                # Cleanup only for the unique session created by this probe.
+                if (-not $stopped) {
+                  $cleanup = Invoke-PrivateNative $logman @('stop',$session,'-ets')
+                  $receipt.cleanup_stop_exit = $cleanup.code
+                }
+                $q = Invoke-PrivateNative $logman @('query',$session,'-ets')
+                $receipt.cleanup_query_exit = $q.code
+                $receipt.cleanup_verified = Test-Absent $q
+              } catch { $receipt.cleanup_verified = $false }
+            }
+            if (Test-Path -LiteralPath $raw) { Remove-Item -LiteralPath $raw -Recurse -Force -ErrorAction SilentlyContinue }
+            $receipt.private_temp_removed = -not (Test-Path -LiteralPath $raw)
+            $receipt.finished_utc = [DateTime]::UtcNow.ToString('o')
+            if (-not $receipt.cleanup_verified -or -not $receipt.private_temp_removed) { $receipt.status = 'BLOCKED_CLEANUP' }
+            $receipt | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $out 'result.json') -Encoding UTF8
+            Write-Host "CLI probe status: $($receipt.status); stage: $($receipt.stage); cleanup: $($receipt.cleanup_verified)"
+          }
+          if ($receipt.status -ne 'PASS_CLI_PROBE_ONLY') { throw 'One-shot diagnostic blocked; inspect sanitized evidence; no rerun' }
+
+      - name: Preserve sanitized probe result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FX-T18-ETW-CLI-PROBE-d72ad5d
+          path: fx-t18-etw-cli-evidence/
+          if-no-files-found: warn
+          retention-days: 3
