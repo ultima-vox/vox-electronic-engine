@@ -541,6 +541,10 @@ if ($collectionReady) {
                         [int]$parserDiagnosticValue.lost_events -eq 0 -and
                         [int]$parserDiagnosticValue.buffer_loss_events -eq 0 -and
                         $null -ne $parserDiagnosticValue.eventtrace_header -and
+                        [string]$parserDiagnosticValue.eventtrace_header.provider_guid -eq '68fdd900-4a3e-11d1-84f4-0000f80464e3' -and
+                        [int]$parserDiagnosticValue.eventtrace_header.event_id -eq 0 -and
+                        [string]$parserDiagnosticValue.eventtrace_header.opcode -eq 'Header' -and
+                        ([int]$parserDiagnosticValue.eventtrace_header.version -eq 0 -or [int]$parserDiagnosticValue.eventtrace_header.version -eq 2) -and
                         [int]$parserDiagnosticValue.eventtrace_header.max_file_size_mb -eq 16 -and
                         [int]$parserDiagnosticValue.eventtrace_header.log_file_mode -eq 0 -and
                         [int]$parserDiagnosticValue.eventtrace_header.buffers_written -gt 0 -and

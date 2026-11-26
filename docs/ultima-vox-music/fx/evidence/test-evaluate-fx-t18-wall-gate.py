@@ -728,7 +728,8 @@ def main() -> int:
         compatibility_xml = compatibility_dir / "compatibility.xml"
         compatibility_xml.write_text(
             """<Events xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\">
-  <Event><System><Provider Name=\"EventTrace\" Guid=\"{68FDD900-4A3E-11D1-84F4-0000F80464E3}\"/><EventID>0</EventID></System><EventData><Data Name=\"MaxFileSize\">16</Data><Data Name=\"LogFileMode\">0x0</Data><Data Name=\"BuffersWritten\">6</Data><Data Name=\"EventsLost\">0</Data><Data Name=\"BuffersLost\">0</Data></EventData></Event>
+  <Event><System><Provider Name=\"EventTrace\" Guid=\"{68FDD900-4A3E-11D1-84F4-0000F80464E3}\"/><EventID>0</EventID><Version>2</Version><Opcode>PartitionInfoExtension</Opcode></System><EventData><Data Name=\"DataItemName\">PartitionInfoExtension</Data></EventData></Event>
+  <Event><System><Provider Name=\"EventTrace\" Guid=\"{68FDD900-4A3E-11D1-84F4-0000F80464E3}\"/><EventID>0</EventID><Version>0</Version><Opcode>Header</Opcode></System><EventData><Data Name=\"MaxFileSize\">16</Data><Data Name=\"LogFileMode\">0x0</Data><Data Name=\"BuffersWritten\">6</Data><Data Name=\"EventsLost\">0</Data><Data Name=\"BuffersLost\">0</Data></EventData></Event>
   <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>1</EventID><TimeCreated SystemTime=\"2026-11-25T10:00:01.0000000Z\"/></System><EventData><Data Name=\"ProcessId\">1234</Data><Data Name=\"ParentId\">100</Data><Data Name=\"ImageName\">timeout.exe</Data><Data Name=\"CreateTime\">2026-11-25T10:00:01.0000000Z</Data></EventData></Event>
   <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>2</EventID><TimeCreated SystemTime=\"2026-11-25T10:00:02.0000000Z\"/></System><EventData><Data Name=\"ProcessId\">1234</Data><Data Name=\"ParentId\">100</Data><Data Name=\"ImageName\">timeout.exe</Data><Data Name=\"CreateTime\">2026-11-25T10:00:01.0000000Z</Data></EventData></Event>
 </Events>""", encoding="utf-8")
@@ -767,6 +768,8 @@ def main() -> int:
                 or diagnostic_value.get("raw_etl_sha256") != hashlib.sha256(compatibility_raw.read_bytes()).hexdigest()
                 or diagnostic_value.get("eventtrace_header", {}).get("max_file_size_mb") != 16
                 or diagnostic_value.get("eventtrace_header", {}).get("log_file_mode") != 0
+                or diagnostic_value.get("eventtrace_header", {}).get("opcode") != "Header"
+                or diagnostic_value.get("eventtrace_header", {}).get("version") != 0
                 or diagnostic_value.get("eventtrace_header", {}).get("buffers_written") != 6):
             raise AssertionError(f"compatibility diagnostic fields/counters were not reconciled: {diagnostic_value}")
         names.append("tracerpt_compatibility_diagnostic_parser")
@@ -1151,7 +1154,8 @@ def main() -> int:
         tracerpt_xml = directory / "tracerpt-kernel-process-shape.xml"
         tracerpt_xml.write_text(
             """<Events xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\">
-  <Event><System><Provider Name=\"EventTrace\" Guid=\"{68FDD900-4A3E-11D1-84F4-0000F80464E3}\"/><EventID>0</EventID></System><EventData><Data Name=\"MaxFileSize\">16</Data><Data Name=\"LogFileMode\">0x0</Data><Data Name=\"BuffersWritten\">6</Data><Data Name=\"EventsLost\">0</Data><Data Name=\"BuffersLost\">0</Data></EventData></Event>
+  <Event><System><Provider Name=\"EventTrace\" Guid=\"{68FDD900-4A3E-11D1-84F4-0000F80464E3}\"/><EventID>0</EventID><Version>2</Version><Opcode>PartitionInfoExtension</Opcode></System><EventData><Data Name=\"DataItemName\">PartitionInfoExtension</Data></EventData></Event>
+  <Event><System><Provider Name=\"EventTrace\" Guid=\"{68FDD900-4A3E-11D1-84F4-0000F80464E3}\"/><EventID>0</EventID><Version>0</Version><Opcode>Header</Opcode></System><EventData><Data Name=\"MaxFileSize\">16</Data><Data Name=\"LogFileMode\">0x0</Data><Data Name=\"BuffersWritten\">6</Data><Data Name=\"EventsLost\">0</Data><Data Name=\"BuffersLost\">0</Data></EventData></Event>
   <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>1</EventID><TimeCreated SystemTime=\"2026-11-22T00:00:01.1234567Z\"/></System><EventData><Data Name=\"ProcessID\">240148</Data><Data Name=\"CreateTime\">2026-11-22T00:00:00.0000000Z</Data><Data Name=\"ParentProcessID\">2620</Data><Data Name=\"ImageName\">\\\\Device\\\\HarddiskVolume2\\\\Windows\\\\System32\\\\cmd.exe</Data></EventData></Event>
   <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>2</EventID><TimeCreated SystemTime=\"2026-11-22T00:00:02.1234567Z\"/></System><EventData><Data Name=\"ProcessID\">240148</Data><Data Name=\"CreateTime\">2026-11-22T00:00:00.0000000Z</Data><Data Name=\"ExitTime\">2026-11-22T00:00:02.1234567Z</Data><Data Name=\"ExitCode\">0</Data></EventData></Event>
 </Events>""",
@@ -1170,8 +1174,28 @@ def main() -> int:
         assert tracerpt_metadata["summary_events_processed"] == 11
         assert tracerpt_metadata["eventtrace_header"]["max_file_size_mb"] == 16
         assert tracerpt_metadata["eventtrace_header"]["log_file_mode"] == 0
+        assert tracerpt_metadata["eventtrace_header"]["opcode"] == "Header"
+        assert tracerpt_metadata["eventtrace_header"]["version"] == 0
         assert tracerpt_metadata["eventtrace_header"]["buffers_written"] == 6
         names.append("tracerpt_kernel_process_start_stop_shape")
+
+        classic_tracerpt_xml = directory / "tracerpt-classic-eventtrace-shape.xml"
+        classic_tracerpt_xml.write_text(
+            """<Events xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\">
+  <Event><System><Provider Guid=\"{9e814aad-3204-11d2-9a82-006008a86939}\"/><EventID>0</EventID><Version>2</Version><Level>0</Level><Task>0</Task><Opcode>0</Opcode><Keywords>0x0</Keywords></System><EventData><Data Name=\"BufferSize\">8192</Data><Data Name=\"MaxFileSize\">16</Data><Data Name=\"LogFileMode\">0x0</Data><Data Name=\"BuffersWritten\">6</Data><Data Name=\"EventsLost\">0</Data><Data Name=\"BuffersLost\">0</Data></EventData><RenderingInfo Culture=\"en-US\"><Opcode>Header</Opcode><Provider>MSNT_SystemTrace</Provider><EventName xmlns=\"http://schemas.microsoft.com/win/2004/08/events/trace\">EventTrace</EventName></RenderingInfo><ExtendedTracingInfo xmlns=\"http://schemas.microsoft.com/win/2004/08/events/trace\"><EventGuid>{68fdd900-4a3e-11d1-84f4-0000f80464e3}</EventGuid></ExtendedTracingInfo></Event>
+  <Event><System><Provider Guid=\"{9e814aad-3204-11d2-9a82-006008a86939}\"/><EventID>0</EventID><Version>2</Version><Level>0</Level><Task>0</Task><Opcode>80</Opcode><Keywords>0x0</Keywords></System><ProcessingErrorData><ErrorCode>0</ErrorCode><DataItemName>PartitionInfoExtension</DataItemName></ProcessingErrorData><RenderingInfo Culture=\"en-US\"><Opcode>PartitionInfoExtensionV2</Opcode><Provider>MSNT_SystemTrace</Provider><EventName xmlns=\"http://schemas.microsoft.com/win/2004/08/events/trace\">EventTrace</EventName></RenderingInfo><ExtendedTracingInfo xmlns=\"http://schemas.microsoft.com/win/2004/08/events/trace\"><EventGuid>{68fdd900-4a3e-11d1-84f4-0000f80464e3}</EventGuid></ExtendedTracingInfo></Event>
+  <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>1</EventID><TimeCreated SystemTime=\"2026-11-22T00:00:01.1234567Z\"/></System><EventData><Data Name=\"ProcessID\">240148</Data><Data Name=\"CreateTime\">2026-11-22T00:00:00.0000000Z</Data><Data Name=\"ParentProcessID\">2620</Data><Data Name=\"ImageName\">cmd.exe</Data></EventData></Event>
+  <Event><System><Provider Name=\"Microsoft-Windows-Kernel-Process\" Guid=\"{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}\"/><EventID>2</EventID><TimeCreated SystemTime=\"2026-11-22T00:00:02.1234567Z\"/></System><EventData><Data Name=\"ProcessID\">240148</Data><Data Name=\"CreateTime\">2026-11-22T00:00:00.0000000Z</Data><Data Name=\"ExitTime\">2026-11-22T00:00:02.1234567Z</Data><Data Name=\"ExitCode\">0</Data></EventData></Event>
+</Events>""",
+            encoding="utf-8")
+        classic_events, classic_metadata = EVALUATOR.ETL_PARSER._parse_xml(
+            classic_tracerpt_xml,
+            "Total Buffers Processed 6\nTotal Events Processed 11\nTotal Events  Lost      0\n")
+        assert len(classic_events) == 2
+        assert classic_metadata["eventtrace_header"]["opcode"] == "Header"
+        assert classic_metadata["eventtrace_header"]["version"] == 2
+        assert classic_metadata["eventtrace_header"]["max_file_size_mb"] == 16
+        names.append("tracerpt_classic_eventtrace_header_partition_identity")
 
         actual_summary = (
             "Total Buffers Processed 6\nTotal Events Processed 11\n"
@@ -1186,7 +1210,7 @@ def main() -> int:
         header_event = (
             '  <Event><System><Provider Name="EventTrace" '
             'Guid="{68FDD900-4A3E-11D1-84F4-0000F80464E3}"/><EventID>0</EventID>'
-            '</System><EventData><Data Name="MaxFileSize">16</Data>'
+            '<Version>0</Version><Opcode>Header</Opcode></System><EventData><Data Name="MaxFileSize">16</Data>'
             '<Data Name="LogFileMode">0x0</Data><Data Name="BuffersWritten">6</Data>'
             '<Data Name="EventsLost">0</Data><Data Name="BuffersLost">0</Data>'
             '</EventData></Event>')
@@ -1204,6 +1228,17 @@ def main() -> int:
         assert_xml_blocked(
             "eventtrace_header_missing_blocked",
             valid_xml_text.replace(header_event + "\n", ""))
+        partition_header_fields = (
+            '<Data Name="MaxFileSize">16</Data><Data Name="LogFileMode">0x0</Data>'
+            '<Data Name="BuffersWritten">6</Data><Data Name="EventsLost">0</Data>'
+            '<Data Name="BuffersLost">0</Data>')
+        assert_xml_blocked(
+            "partition_info_extension_not_header_blocked",
+            valid_xml_text.replace(header_event + "\n", "").replace(
+                '<Data Name="DataItemName">PartitionInfoExtension</Data>', partition_header_fields))
+        assert_xml_blocked(
+            "eventtrace_header_unknown_opcode_blocked",
+            valid_xml_text.replace("<Opcode>Header</Opcode>", "<Opcode>Unknown</Opcode>"))
         assert_xml_blocked(
             "eventtrace_header_duplicate_blocked",
             valid_xml_text.replace("</Events>", header_event + "\n</Events>"))

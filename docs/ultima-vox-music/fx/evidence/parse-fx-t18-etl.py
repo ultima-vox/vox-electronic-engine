@@ -47,10 +47,11 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 FORMAT = "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
-PARSER_VERSION = "1.6.0"
+PARSER_VERSION = "1.7.0"
 PROVIDER = "Microsoft-Windows-Kernel-Process/ETW"
 PROVIDER_GUID = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716"
 EVENT_TRACE_PROVIDER_GUID = "68fdd900-4a3e-11d1-84f4-0000f80464e3"
+MSNT_SYSTEM_TRACE_PROVIDER_GUID = "9e814aad-3204-11d2-9a82-006008a86939"
 PROCESS_PROVIDER_NAMES = {
     "microsoft-windows-kernel-process",
     "microsoft-windows-kernel-process/etw",
@@ -670,45 +671,174 @@ def _parse_nonnegative_uint(value: str | None, name: str) -> int:
     return parsed
 
 
+def _eventtrace_opcode_values(node: ET.Element) -> tuple[set[str], set[int]]:
+    values = []
+    for attribute in ("Name", "name", "Value", "value"):
+        if node.attrib.get(attribute) is not None:
+            values.append(node.attrib[attribute].strip())
+    if node.text and node.text.strip():
+        values.append(node.text.strip())
+    if not values:
+        raise ValueError("tracerpt XML EventTrace record has an empty Opcode")
+    labels = {value.casefold() for value in values
+              if re.fullmatch(r"0[xX][0-9a-fA-F]+|[0-9]+", value) is None}
+    numeric_values = {
+        _parse_nonnegative_uint(value, "EventTrace Opcode")
+        for value in values
+        if re.fullmatch(r"0[xX][0-9a-fA-F]+|[0-9]+", value)
+    }
+    if len(labels) > 1 or len(numeric_values) > 1:
+        raise ValueError("tracerpt XML EventTrace record Opcode identity is contradictory")
+    allowed = {"header", "partitioninfoextension", "partitioninfoextensionv1", "partitioninfoextensionv2"}
+    if not labels.issubset(allowed):
+        raise ValueError("tracerpt XML EventTrace record Opcode identity is unknown")
+    if labels & {"header"} and labels & {"partitioninfoextension", "partitioninfoextensionv1", "partitioninfoextensionv2"}:
+        raise ValueError("tracerpt XML EventTrace record Opcode identity is contradictory")
+    return labels, numeric_values
+
+
+def _eventtrace_opcode_identity(event: ET.Element) -> str:
+    """Return the documented EventTrace identity from System and RenderingInfo.
+
+    ``tracerpt`` has emitted two equivalent XML shapes. Newer output may put
+    the EventTrace GUID and symbolic opcode directly in System. Classic output
+    uses the MSNT_SystemTrace GUID in System, the EventTrace GUID in
+    ExtendedTracingInfo, numeric System Opcode values, and the symbolic
+    ``Header``/``PartitionInfoExtensionV2`` opcode in RenderingInfo. Both
+    shapes are checked structurally; EventData values never identify the
+    record. In either shape, EventID 0 alone is deliberately insufficient.
+    """
+    system_nodes = [node for node in list(event)
+                    if node.tag.rsplit("}", 1)[-1].casefold() == "system"]
+    if len(system_nodes) != 1:
+        raise ValueError("tracerpt XML EventTrace record must contain exactly one System block")
+    system = system_nodes[0]
+    provider_nodes = [node for node in list(system)
+                      if node.tag.rsplit("}", 1)[-1].casefold() == "provider"]
+    if len(provider_nodes) != 1:
+        raise ValueError("tracerpt XML EventTrace record provider identity is ambiguous")
+    system_guid = _normalize_guid(provider_nodes[0].attrib.get("Guid"))
+    if system_guid not in {EVENT_TRACE_PROVIDER_GUID, MSNT_SYSTEM_TRACE_PROVIDER_GUID}:
+        raise ValueError("tracerpt XML EventTrace record provider GUID is contradictory")
+    provider_name = provider_nodes[0].attrib.get("Name")
+    if (system_guid == EVENT_TRACE_PROVIDER_GUID and provider_name is not None
+            and provider_name.casefold() != "eventtrace"):
+        raise ValueError("tracerpt XML EventTrace record provider name is contradictory")
+
+    extended_nodes = [node for node in list(event)
+                      if node.tag.rsplit("}", 1)[-1].casefold() == "extendedtracinginfo"]
+    extended_guid_values = []
+    for extended in extended_nodes:
+        event_guid_nodes = [node for node in list(extended)
+                            if node.tag.rsplit("}", 1)[-1].casefold() == "eventguid"]
+        if len(event_guid_nodes) != 1:
+            raise ValueError("tracerpt XML EventTrace ExtendedTracingInfo GUID is ambiguous")
+        extended_guid_values.append(_normalize_guid(event_guid_nodes[0].text))
+    if system_guid == MSNT_SYSTEM_TRACE_PROVIDER_GUID:
+        if extended_guid_values != [EVENT_TRACE_PROVIDER_GUID]:
+            raise ValueError("tracerpt XML EventTrace classic provider lacks its EventTrace GUID")
+    elif extended_guid_values and any(value != EVENT_TRACE_PROVIDER_GUID for value in extended_guid_values):
+        raise ValueError("tracerpt XML EventTrace ExtendedTracingInfo GUID is contradictory")
+
+    version_nodes = [node for node in list(system)
+                     if node.tag.rsplit("}", 1)[-1].casefold() == "version"]
+    system_opcode_nodes = [node for node in list(system)
+                           if node.tag.rsplit("}", 1)[-1].casefold() == "opcode"]
+    if len(version_nodes) != 1 or len(system_opcode_nodes) != 1:
+        raise ValueError("tracerpt XML EventTrace record lacks an unambiguous Version/Opcode identity")
+    version = _parse_nonnegative_uint(version_nodes[0].text, "EventTrace Version")
+    system_labels, system_numeric = _eventtrace_opcode_values(system_opcode_nodes[0])
+
+    rendering_nodes = [node for node in list(event)
+                       if node.tag.rsplit("}", 1)[-1].casefold() == "renderinginfo"]
+    rendering_labels: set[str] = set()
+    if len(rendering_nodes) > 1:
+        raise ValueError("tracerpt XML EventTrace RenderingInfo identity is ambiguous")
+    if rendering_nodes:
+        rendering = rendering_nodes[0]
+        event_name_nodes = [node for node in list(rendering)
+                            if node.tag.rsplit("}", 1)[-1].casefold() == "eventname"]
+        if len(event_name_nodes) > 1:
+            raise ValueError("tracerpt XML EventTrace RenderingInfo EventName is ambiguous")
+        if event_name_nodes and (event_name_nodes[0].text or "").strip().casefold() != "eventtrace":
+            raise ValueError("tracerpt XML EventTrace RenderingInfo EventName is contradictory")
+        rendering_opcode_nodes = [node for node in list(rendering)
+                                  if node.tag.rsplit("}", 1)[-1].casefold() == "opcode"]
+        if len(rendering_opcode_nodes) > 1:
+            raise ValueError("tracerpt XML EventTrace RenderingInfo Opcode is ambiguous")
+        if rendering_opcode_nodes:
+            rendering_labels, rendering_numeric = _eventtrace_opcode_values(rendering_opcode_nodes[0])
+            if rendering_numeric:
+                raise ValueError("tracerpt XML EventTrace RenderingInfo Opcode must be symbolic")
+    if system_labels and rendering_labels:
+        system_partition = bool(system_labels & {"partitioninfoextension", "partitioninfoextensionv1", "partitioninfoextensionv2"})
+        rendering_partition = bool(rendering_labels & {"partitioninfoextension", "partitioninfoextensionv1", "partitioninfoextensionv2"})
+        if (system_partition != rendering_partition
+                or (not system_partition and system_labels != rendering_labels)):
+            raise ValueError("tracerpt XML EventTrace System/RenderingInfo Opcode identity contradicts")
+    labels = rendering_labels or system_labels
+
+    if labels == {"header"}:
+        if version not in {0, 2} or system_numeric not in ({0}, set()):
+            raise ValueError("tracerpt XML EventTrace Header has a contradictory Version/Opcode identity")
+        return "Header"
+    partition_labels = {"partitioninfoextension", "partitioninfoextensionv1", "partitioninfoextensionv2"}
+    if labels & partition_labels:
+        if version != 2 or system_numeric not in ({0}, {2}, {80}, set()):
+            raise ValueError("tracerpt XML EventTrace PartitionInfoExtension has a contradictory identity")
+        return "PartitionInfoExtension"
+    if not labels and system_numeric == {0} and version == 0:
+        return "Header"
+    if not labels and system_numeric == {80} and version == 2:
+        return "PartitionInfoExtension"
+    raise ValueError("tracerpt XML EventTrace record has an ambiguous Version/Opcode identity")
+
+
 def _parse_eventtrace_header(root: ET.Element) -> dict[str, Any]:
     """Read exactly one structurally identified EventTrace_Header event.
 
-    The header is the decoded representation of TRACE_LOGFILE_HEADER.  Only
-    EventTrace provider GUID 68fdd900-4a3e-11d1-84f4-0000f80464e3, event ID
-    zero, and its single EventData block are considered.  In particular, a
-    Data node with the same name in a process event can never satisfy this
+    The decoded EventTrace provider has multiple EventID-zero records. The
+    retained XML must therefore identify the Header opcode; an EventID alone
+    is not sufficient because PartitionInfoExtension also uses EventID zero.
+    Only the Header record's single EventData block is considered. A Data node
+    with the same name in a process or partition event can never satisfy this
     function.
     """
     candidates: list[ET.Element] = []
     for event in root.iter():
         if event.tag.rsplit("}", 1)[-1].casefold() != "event":
             continue
-        providers = [node for node in event.iter()
-                     if node.tag.rsplit("}", 1)[-1].casefold() == "provider"]
-        event_ids = [node for node in event.iter()
-                     if node.tag.rsplit("}", 1)[-1].casefold() == "eventid"]
-        matching_guid = any(_normalize_guid(node.attrib.get("Guid")) == EVENT_TRACE_PROVIDER_GUID
-                            for node in providers)
-        if not matching_guid:
+        system_nodes = [node for node in list(event)
+                        if node.tag.rsplit("}", 1)[-1].casefold() == "system"]
+        if len(system_nodes) != 1:
             continue
-        if len(event_ids) != 1:
-            raise ValueError("tracerpt XML EventTrace header has an ambiguous EventID")
-        try:
-            event_id = int((event_ids[0].text or "").strip(), 0)
-        except ValueError as error:
-            raise ValueError("tracerpt XML EventTrace header EventID is not numeric") from error
-        if event_id == 0:
+        provider_nodes = [node for node in list(system_nodes[0])
+                          if node.tag.rsplit("}", 1)[-1].casefold() == "provider"]
+        if not any(_normalize_guid(node.attrib.get("Guid")) in {
+            EVENT_TRACE_PROVIDER_GUID, MSNT_SYSTEM_TRACE_PROVIDER_GUID
+        } for node in provider_nodes):
+            continue
+        if len(provider_nodes) != 1:
+            raise ValueError("tracerpt XML EventTrace record provider identity is ambiguous")
+        if _normalize_guid(provider_nodes[0].attrib.get("Guid")) not in {
+            EVENT_TRACE_PROVIDER_GUID, MSNT_SYSTEM_TRACE_PROVIDER_GUID
+        }:
+            raise ValueError("tracerpt XML EventTrace record provider GUID is contradictory")
+        event_id_nodes = [node for node in list(system_nodes[0])
+                          if node.tag.rsplit("}", 1)[-1].casefold() == "eventid"]
+        if len(event_id_nodes) != 1:
+            raise ValueError("tracerpt XML EventTrace record has an ambiguous EventID")
+        event_id = _parse_nonnegative_uint(event_id_nodes[0].text, "EventTrace EventID")
+        if event_id != 0:
+            continue
+        identity = _eventtrace_opcode_identity(event)
+        if identity == "Header":
             candidates.append(event)
+        elif identity != "PartitionInfoExtension":
+            raise ValueError("tracerpt XML EventTrace EventID-zero identity is unsupported")
     if len(candidates) != 1:
-        raise ValueError("tracerpt XML must contain exactly one validated EventTrace header")
+        raise ValueError("tracerpt XML must contain exactly one validated EventTrace Header opcode event")
     event = candidates[0]
-    providers = [node for node in event.iter()
-                 if node.tag.rsplit("}", 1)[-1].casefold() == "provider"]
-    if len(providers) != 1 or _normalize_guid(providers[0].attrib.get("Guid")) != EVENT_TRACE_PROVIDER_GUID:
-        raise ValueError("tracerpt XML EventTrace header provider identity is ambiguous")
-    provider_name = providers[0].attrib.get("Name")
-    if provider_name is not None and provider_name.casefold() != "eventtrace":
-        raise ValueError("tracerpt XML EventTrace header provider name is contradictory")
     event_data_nodes = [node for node in list(event)
                         if node.tag.rsplit("}", 1)[-1].casefold() == "eventdata"]
     if len(event_data_nodes) != 1:
@@ -734,9 +864,16 @@ def _parse_eventtrace_header(root: ET.Element) -> dict[str, Any]:
         raise ValueError("tracerpt XML EventTrace header fields are not unambiguous (" + "; ".join(detail) + ")")
     parsed = {name: _parse_nonnegative_uint(values[name][0], f"EventTrace Header {name}")
               for name in required_names}
+    system_nodes = [node for node in list(event)
+                    if node.tag.rsplit("}", 1)[-1].casefold() == "system"]
+    version_nodes = [node for node in list(system_nodes[0])
+                     if node.tag.rsplit("}", 1)[-1].casefold() == "version"]
+    header_version = _parse_nonnegative_uint(version_nodes[0].text, "EventTrace Header Version")
     return {
         "provider_guid": EVENT_TRACE_PROVIDER_GUID,
         "event_id": 0,
+        "opcode": "Header",
+        "version": header_version,
         "max_file_size_mb": parsed["MaxFileSize"],
         "log_file_mode": parsed["LogFileMode"],
         "log_file_mode_hex": f"0x{parsed['LogFileMode']:x}",
@@ -1726,16 +1863,18 @@ def verify_receipt(raw_path: Path, receipt: dict[str, Any], fixture: bool = Fals
                 or receipt.get("buffers_written") != header.get("buffers_written")):
             raise ValueError("production ETW parse receipt header projection does not reconcile")
         required_header = {
-            "provider_guid", "event_id", "max_file_size_mb", "log_file_mode",
+            "provider_guid", "event_id", "opcode", "version", "max_file_size_mb", "log_file_mode",
             "buffers_written", "events_lost", "buffers_lost",
         }
         if set(required_header) - set(header):
             raise ValueError("production ETW parse receipt EventTrace header provenance is incomplete")
-        for field in ("event_id", "max_file_size_mb", "log_file_mode", "buffers_written", "events_lost", "buffers_lost"):
+        for field in ("event_id", "version", "max_file_size_mb", "log_file_mode", "buffers_written", "events_lost", "buffers_lost"):
             if type(header.get(field)) is not int or header[field] < 0:
                 raise ValueError("production ETW parse receipt EventTrace header contains a non-negative integer violation")
         if (header.get("provider_guid") != EVENT_TRACE_PROVIDER_GUID
                 or header.get("event_id") != 0
+                or header.get("opcode") != "Header"
+                or header.get("version") not in {0, 2}
                 or header.get("log_file_mode_hex") != f"0x{header['log_file_mode']:x}"):
             raise ValueError("production ETW parse receipt EventTrace header identity/mode is invalid")
         approval_fields = (

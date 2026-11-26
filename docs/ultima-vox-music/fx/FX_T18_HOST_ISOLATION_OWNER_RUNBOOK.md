@@ -754,9 +754,12 @@ The script performs that parser invocation itself; the command above documents
 the exact field/counter/binding test and is not a second decoder run. The
 parser diagnostic applies the production XML/summary field shape, binds exactly
 one observed start and stop to the private controlled PID plus creation time
-(with only a one-second timestamp-representation tolerance), validates the
-single EventTrace Header for `MaxFileSize`, `LogFileMode`, `BuffersWritten`,
-`EventsLost`, and `BuffersLost`, reconciles summary counters, and emits
+(with only a one-second timestamp-representation tolerance), validates exactly
+one EventTrace `Header` identity (provider GUID
+`68fdd900-4a3e-11d1-84f4-0000f80464e3`, EventID `0`, documented Header opcode
+and version) rather than the EventID-zero `PartitionInfoExtension`, then validates
+`MaxFileSize`, `LogFileMode`, `BuffersWritten`, `EventsLost`, and `BuffersLost`,
+reconciles summary counters, and emits
 only sanitized booleans/counts and artifact hashes with
 `qualification_prohibited=true`. The raw controlled-process identity remains
 private.

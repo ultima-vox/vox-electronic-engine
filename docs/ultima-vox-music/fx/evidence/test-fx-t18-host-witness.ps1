@@ -24,6 +24,8 @@ $parserSource = Get-Content -LiteralPath $parserScript -Raw
 $diagnosticScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'diagnose-fx-t18-tracerpt-compatibility.ps1')).Path
 $diagnosticSource = Get-Content -LiteralPath $diagnosticScript -Raw
 if ($parserSource -notmatch 'EVENT_TRACE_PROVIDER_GUID' -or
+    $parserSource -notmatch 'MSNT_SYSTEM_TRACE_PROVIDER_GUID' -or
+    $parserSource -notmatch 'PartitionInfoExtension' -or
     $parserSource -notmatch 'validated EventTrace_Header' -or
     $parserSource -notmatch 'summary_buffers_processed' -or
     $parserSource -notmatch 'strict non-negative integer' -or
