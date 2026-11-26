@@ -1,0 +1,143 @@
+name: FX-T18 Offline Replay (one shot)
+on:
+  push:
+    branches: [ops/fx-t18-offline-replay-20261126]
+    paths: ['.github/workflows/fx-t18-offline-replay.yml']
+permissions:
+  contents: read
+concurrency:
+  group: fx-t18-offline-replay-20261126
+  cancel-in-progress: false
+jobs:
+  replay:
+    if: github.run_attempt == 1
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+    steps:
+      - name: Verify target host
+        shell: powershell
+        run: |
+          if ($env:COMPUTERNAME -ine 'HAMUNAPTRA') { throw 'BLOCKED: unexpected host' }
+      - uses: actions/checkout@v4
+        with:
+          ref: 465a61930d0db5c9775227642a2832648e985f1a
+          persist-credentials: false
+      - name: Offline replay (sanitized)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD).Trim() -ne '465a61930d0db5c9775227642a2832648e985f1a') { throw 'BLOCKED: parser checkout mismatch' }
+          $source = @'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import subprocess
+          import sys
+          import tempfile
+
+          def stop(category):
+              print("BLOCKED: " + category, flush=True)
+              sys.exit(2)
+
+          def sha(p):
+              with p.open("rb") as f:
+                  h = hashlib.sha256()
+                  for chunk in iter(lambda: f.read(65536), b""):
+                      h.update(chunk)
+                  return h.hexdigest()
+
+          def json_read(p):
+              return json.loads(p.read_text(encoding="utf-8-sig"))
+
+          def receipt(p):
+              head = p.read_text(encoding="utf-8-sig").split("--- RAW OUTPUT ---", 1)
+              if len(head) != 2:
+                  stop("invalid control receipt")
+              values = {}
+              for line in head[0].splitlines():
+                  if "=" in line:
+                      k, v = line.split("=", 1)
+                      if k in values:
+                          stop("duplicate control receipt key")
+                      values[k] = v.strip()
+              return values
+
+          def main():
+              if os.environ.get("COMPUTERNAME", "").casefold() != "hamunaptra":
+                  stop("unexpected host")
+              root = pathlib.Path(r"D:\owner-evidence\fx-t18")
+              expected = {
+                  "compat.etl": "62cdd65243a2f49f495dc59172eef3516776ec750a8f271b1a6003a2cea5dbe0",
+                  "tracerpt-output.xml": "440c973a01723ba85057aa4f721ce68a6364c2fa8a44eca92dec35b5a783e08d",
+                  "tracerpt-summary.txt": "0a637c899b2806d6928f8f571fe6a204e495a88fb415326b2ec950bda8fb915a",
+              }
+              if not root.is_dir():
+                  stop("evidence root unavailable")
+              matches = []
+              for folder in root.glob("tracerpt-compat-*"):
+                  if not folder.is_dir() or folder.is_symlink():
+                      continue
+                  etl = folder / "compat.etl"
+                  if etl.is_file() and not etl.is_symlink() and etl.stat().st_size == 49152 and sha(etl) == expected["compat.etl"]:
+                      matches.append(folder)
+              if len(matches) != 1:
+                  stop("original evidence directory absent or ambiguous")
+              folder = matches[0]
+              names = list(expected) + ["controlled-process.json", "diagnostic-summary.json", "logman-stop.txt", "logman-post-stop-query.txt"]
+              paths = {n: folder / n for n in names}
+              if any(not p.is_file() or p.is_symlink() for p in paths.values()):
+                  stop("required evidence unavailable")
+              before = {n: sha(p) for n, p in paths.items()}
+              if any(before[n] != v for n, v in expected.items()):
+                  stop("original input hash mismatch")
+              original = json_read(paths["diagnostic-summary.json"])
+              for field, name in [("etl_sha256", "compat.etl"), ("decoded_xml_sha256", "tracerpt-output.xml"), ("tracerpt_summary_sha256", "tracerpt-summary.txt"), ("controlled_process_receipt_sha256", "controlled-process.json")]:
+                  if original.get(field) != before[name]:
+                      stop("original diagnostic receipt hash mismatch")
+              stop_record = receipt(paths["logman-stop.txt"])
+              query_record = receipt(paths["logman-post-stop-query.txt"])
+              stop_match = re.fullmatch(r"stop (VOX-FX-T18-[A-Za-z0-9-]+) -ets", stop_record.get("arguments", ""), re.I)
+              query_match = re.fullmatch(r"query (VOX-FX-T18-[A-Za-z0-9-]+) -ets", query_record.get("arguments", ""), re.I)
+              if not stop_match or not query_match or stop_match[1] != query_match[1]:
+                  stop("session binding unavailable")
+              if stop_record.get("exit_code") != "0" or original.get("stop_exit_code") != 0:
+                  stop("stop receipt not successful")
+              code = int(query_record.get("exit_code", "0"), 10)
+              if code not in (-2144337918, 0x80300002) or original.get("post_stop_query_exit_code") != code or original.get("post_stop_active_marker") is not False:
+                  stop("cleanup HRESULT not verified")
+              print("original_hashes_verified=true; original_cleanup_hresult_verified=true", flush=True)
+              parser = pathlib.Path("docs/ultima-vox-music/fx/evidence/parse-fx-t18-etl.py")
+              with tempfile.TemporaryDirectory(prefix="fx-t18-offline-") as temporary:
+                  output = pathlib.Path(temporary) / "report.json"
+                  command = [sys.executable, str(parser), "--etl", str(paths["compat.etl"]), "--diagnostic-decoded-xml", str(paths["tracerpt-output.xml"]), "--diagnostic-summary", str(paths["tracerpt-summary.txt"]), "--diagnostic-controlled-process", str(paths["controlled-process.json"]), "--diagnostic-output", str(output)]
+                  result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90, check=False)
+                  if before != {n: sha(p) for n, p in paths.items()}:
+                      stop("input integrity changed")
+                  print("parser_exit_code=" + str(result.returncode), flush=True)
+                  if result.returncode != 0 or not output.is_file():
+                      stop("parser rejected retained evidence")
+                  report = json_read(output)
+                  required = {"controlled_process_binding_valid": True, "controlled_start_match_count": 1, "controlled_stop_match_count": 1, "controlled_lifecycle_order_valid": True, "lost_events": 0, "buffer_loss_events": 0, "buffers_written": 6, "max_file_size_mb": 16, "log_file_mode": 0, "qualification_prohibited": True, "diagnostic_only": True, "production_receipt_created": False}
+                  header = report.get("eventtrace_header", {})
+                  for k, v in required.items():
+                      actual = report.get(k)
+                      print(k + "=" + (json.dumps(actual) if type(actual) in (int, bool) else "missing_or_invalid"), flush=True)
+                      if type(actual) != type(v) or actual != v:
+                          stop("diagnostic result mismatch")
+                  if header.get("opcode") != "Header" or type(header.get("version")) is not int or header["version"] not in (0, 2):
+                      stop("header identity mismatch")
+                  for field, name in [("raw_etl_sha256", "compat.etl"), ("decoded_xml_sha256", "tracerpt-output.xml"), ("summary_sha256", "tracerpt-summary.txt"), ("controlled_process_receipt_sha256", "controlled-process.json")]:
+                      if report.get(field) != before[name]:
+                          stop("parser input hash mismatch")
+                  print("input_integrity_unchanged=true; parser_hashes_verified=true; header_identity_verified=true")
+                  print("OFFLINE_REPLAY_PASS; qualification_prohibited=true")
+
+          try:
+              main()
+          except Exception:
+              stop("local evidence access or processing failure")
+          '@
+          $source | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Offline replay blocked; see sanitized output' }
