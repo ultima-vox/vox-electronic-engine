@@ -20,13 +20,13 @@ jobs:
           if ($env:COMPUTERNAME -ine 'HAMUNAPTRA') { throw 'BLOCKED: unexpected host' }
       - uses: actions/checkout@v4
         with:
-          ref: 465a61930d0db5c9775227642a2832648e985f1a
+          ref: e5a8c3964950a36931c77515e161c4c0ed493c21
           persist-credentials: false
       - name: Offline replay (sanitized)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          if ((git rev-parse HEAD).Trim() -ne '465a61930d0db5c9775227642a2832648e985f1a') { throw 'BLOCKED: parser checkout mismatch' }
+          if ((git rev-parse HEAD).Trim() -ne 'e5a8c3964950a36931c77515e161c4c0ed493c21') { throw 'BLOCKED: parser checkout mismatch' }
           $source = @'
           import hashlib
           import json
