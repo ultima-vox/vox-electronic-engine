@@ -1,0 +1,96 @@
+name: FX-T18 XML structure inventory
+on:
+  push:
+    branches: [ops/fx-t18-offline-replay-20261126]
+    paths: ['.github/workflows/fx-t18-xml-inventory.yml']
+permissions:
+  contents: read
+jobs:
+  inventory:
+    if: github.run_attempt == 1
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 3
+    steps:
+      - name: Inspect only verified XML metadata
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:COMPUTERNAME -ine 'HAMUNAPTRA') { throw 'BLOCKED: unexpected host' }
+          $source = @'
+          import collections
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+
+          def local(tag):
+              return tag.rsplit("}", 1)[-1].casefold()
+
+          def children(node, name):
+              return [x for x in list(node) if local(x.tag) == name]
+
+          def safe_label(value):
+              value = (value or "").strip()
+              if re.fullmatch(r"(?i)(?:Microsoft-Windows-Kernel-Process|MSNT_SystemTrace|EventTrace|Process|ProcessStart|ProcessStop|ProcessEnd|ProcessDCStart|ProcessDCStop|DCStart|DCStop|Start|Stop|End|Header|PartitionInfoExtension(?:V[12])?|Kernel-Process|Process_V[0-9]+|ProcessStart_V[0-9]+|ProcessStop_V[0-9]+|ProcessEnd_V[0-9]+|ProcessDCStart_V[0-9]+|ProcessDCStop_V[0-9]+)", value):
+                  return value
+              if re.fullmatch(r"(?:[0-9]{1,5}|0[xX][0-9a-fA-F]{1,8})", value):
+                  return value
+              return "absent" if not value else "other"
+
+          def safe_guid(value):
+              v = (value or "").strip().strip("{}").lower()
+              if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", v):
+                  return v
+              return "absent" if not v else "other"
+
+          def labels(node, name, fn=safe_label):
+              return [fn(x.text) for x in children(node, name)]
+
+          def main():
+              root = pathlib.Path(os.environ["LOCALAPPDATA"]) / "VOX-FX-T18-369c0260e26e464597c76a14bda84dcd"
+              data = (root / "tracerpt-output.xml").read_bytes()
+              if hashlib.sha256(data).hexdigest() != "440c973a01723ba85057aa4f721ce68a6364c2fa8a44eca92dec35b5a783e08d":
+                  raise ValueError("hash")
+              counts = collections.Counter()
+              known_fields = {x.casefold() for x in ("ProcessId", "NewProcessId", "ParentId", "ParentProcessId", "ParentPID", "ImageName", "ImageFileName", "ProcessName", "CreateTime", "CreationTime", "ProcessCreateTime", "ExitTime", "ExitCode", "ProcessSequenceNumber", "ParentProcessSequenceNumber", "SessionId", "Flags", "CommandLine", "UserSID", "UniqueProcessKey", "MaxFileSize", "LogFileMode", "BuffersWritten", "EventsLost", "BuffersLost")}
+              for event in ET.fromstring(data).iter():
+                  if local(event.tag) != "event":
+                      continue
+                  systems = children(event, "system")
+                  system = systems[0] if len(systems) == 1 else ET.Element("empty")
+                  providers = children(system, "provider")
+                  renderings = children(event, "renderinginfo")
+                  extended = children(event, "extendedtracinginfo")
+                  fields = [str(d.attrib.get("Name", "")).casefold() for block in children(event, "eventdata") for d in children(block, "data")]
+                  rec = {
+                      "system_count": len(systems),
+                      "provider_guid": [safe_guid(p.attrib.get("Guid")) for p in providers],
+                      "provider_name": [safe_label(p.attrib.get("Name")) for p in providers],
+                      "event_id": labels(system, "eventid"),
+                      "version": labels(system, "version"),
+                      "opcode": labels(system, "opcode"),
+                      "event_guid": [g for x in extended for g in labels(x, "eventguid", safe_guid)],
+                      "rendering_provider": [v for x in renderings for v in labels(x, "provider")],
+                      "rendering_event_name": [v for x in renderings for v in labels(x, "eventname")],
+                      "rendering_opcode": [v for x in renderings for v in labels(x, "opcode")],
+                      "eventdata_fields": sorted(f for f in fields if f in known_fields),
+                      "other_field_count": sum(f not in known_fields for f in fields),
+                      "processing_error_data": bool(children(event, "processingerrordata")),
+                  }
+                  counts[json.dumps(rec, sort_keys=True)] += 1
+              print("xml_hash_verified=true")
+              print("xml_event_count=" + str(sum(counts.values())))
+              for shape, count in sorted(counts.items()):
+                  print("shape=" + json.dumps({"count": count, **json.loads(shape)}, sort_keys=True))
+              print("XML_INVENTORY_COMPLETE; qualification_prohibited=true")
+          try:
+              main()
+          except Exception:
+              print("BLOCKED: XML inventory unavailable or hash mismatch")
+              sys.exit(2)
+          '@
+          $source | python -
+          if ($LASTEXITCODE -ne 0) { throw 'XML inventory blocked' }
