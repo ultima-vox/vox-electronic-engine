@@ -50,7 +50,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 FORMAT = "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
-PARSER_VERSION = "1.10.0"
+PARSER_VERSION = "1.11.0"
 PROVIDER = "Microsoft-Windows-Kernel-Process/ETW"
 PROVIDER_GUID = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716"
 EVENT_TRACE_PROVIDER_GUID = "68fdd900-4a3e-11d1-84f4-0000f80464e3"
@@ -309,17 +309,17 @@ def _required_event_shape(events: Any) -> list[dict[str, Any]]:
     if not isinstance(events, list):
         raise ValueError("decoded process_events is not a list")
     result: list[dict[str, Any]] = []
-    previous: datetime | None = None
+    previous_ticks: int | None = None
     for index, event in enumerate(events):
         if not isinstance(event, dict) or event.get("event") not in {"start", "stop"}:
             raise ValueError(f"decoded process_events[{index}] has no start/stop kind")
         for field in ("timestamp_utc", "pid", "process_name", "parent_pid", "start_time_utc"):
             if field not in event:
                 raise ValueError(f"decoded process_events[{index}] is missing {field}")
-        stamp = utc(event["timestamp_utc"])
-        if previous is not None and stamp < previous:
+        stamp_ticks = utc_ticks(event["timestamp_utc"])
+        if previous_ticks is not None and stamp_ticks < previous_ticks:
             raise ValueError("decoded process events are not monotonic")
-        previous = stamp
+        previous_ticks = stamp_ticks
         if type(event["pid"]) is not int or event["pid"] < 1 \
                 or type(event["parent_pid"]) is not int or event["parent_pid"] < 0 \
                 or not isinstance(event["process_name"], str) or not event["process_name"]:
@@ -663,7 +663,7 @@ def _parse_tracerpt_summary(summary: str, require_loss_counters: bool = False) -
             end = _summary_timestamp(end_value, "Log End Time")
         except ValueError:
             end = None
-    if start is not None and end is not None and utc(end) <= utc(start):
+    if start is not None and end is not None and utc_ticks(end) <= utc_ticks(start):
         raise ValueError("tracerpt summary coverage interval is not positive")
     if session_value is not None and session_value.startswith("<"):
         session_value = None
@@ -983,8 +983,11 @@ def _parse_xml(decoded: Path, summary: str,
     root = ET.parse(decoded).getroot()
     events: list[dict[str, Any]] = []
     starts: dict[tuple[int, str], dict[str, Any]] = {}
+    stops: dict[tuple[int, str], dict[str, Any]] = {}
     unmatched_events: list[dict[str, Any]] = []
+    unmatched_identity_keys: set[tuple[int, str]] = set()
     observed_event_timestamps: list[str] = []
+    observed_event_ticks: list[int] = []
     observed_process_start_events = 0
     observed_process_stop_events = 0
     for event in root.iter():
@@ -998,9 +1001,11 @@ def _parse_xml(decoded: Path, summary: str,
         else:
             observed_process_stop_events += 1
         event_timestamp_utc = _event_time(event)
+        event_timestamp_ticks = utc_ticks(event_timestamp_utc)
         observed_event_timestamps.append(event_timestamp_utc)
-        if (len(observed_event_timestamps) > 1
-                and utc(event_timestamp_utc) < utc(observed_event_timestamps[-2])):
+        observed_event_ticks.append(event_timestamp_ticks)
+        if (len(observed_event_ticks) > 1
+                and event_timestamp_ticks < observed_event_ticks[-2]):
             raise ValueError("tracerpt process events are not monotonic")
         # Kernel ProcessStart/Stop carries PID, parent PID, image and creation
         # time. Path/hash/service/ancestry are populated by the owner-side
@@ -1012,11 +1017,17 @@ def _parse_xml(decoded: Path, summary: str,
         if not start_time:
             raise ValueError("tracerpt process event lacks CreateTime")
         start_time_utc = _tracerpt_xml_timestamp_text(start_time, "tracerpt process creation time")
+        start_time_ticks = utc_ticks(start_time_utc)
+        if event_timestamp_ticks < start_time_ticks:
+            raise ValueError("tracerpt process event precedes its process creation time")
         if kind == "stop":
             exit_time = _data_value(event, {"ExitTime"})
             if exit_time is not None:
-                _tracerpt_xml_timestamp_text(exit_time, "tracerpt process exit time")
-        prior = starts.get((pid, start_time_utc))
+                exit_time_utc = _tracerpt_xml_timestamp_text(exit_time, "tracerpt process exit time")
+                if utc_ticks(exit_time_utc) < start_time_ticks:
+                    raise ValueError("tracerpt process ExitTime precedes its process creation time")
+        identity_key = (pid, start_time_utc)
+        prior = starts.get(identity_key)
         if kind == "start":
             if not process_name or not parent_value:
                 raise ValueError("tracerpt process-start event lacks ImageName or ParentProcessID")
@@ -1026,6 +1037,10 @@ def _parse_xml(decoded: Path, summary: str,
                 raise ValueError("tracerpt process-start event has an empty ImageName")
             if prior is not None:
                 raise ValueError("tracerpt process-start identity is duplicated")
+            if identity_key in unmatched_identity_keys:
+                raise ValueError("tracerpt process stop precedes its matching start")
+            if any(key[0] == pid for key in unmatched_identity_keys):
+                raise ValueError("tracerpt process-start PID conflicts with an earlier unmatched stop")
         else:
             # Kernel-Process stop records commonly contain only ProcessID,
             # CreateTime, ExitTime and ExitCode. Reconcile their identity from
@@ -1034,6 +1049,8 @@ def _parse_xml(decoded: Path, summary: str,
             # when it is noncontrolled and lacks a parent; production parsing
             # remains fail-closed for every unmatched stop.
             if prior is None:
+                if any(key[0] == pid for key in starts):
+                    raise ValueError("tracerpt process-stop identity conflicts with its PID start identity")
                 if (diagnostic_unmatched_noncontrolled_pid is not None
                         and pid == diagnostic_unmatched_noncontrolled_pid):
                     raise ValueError("controlled process stop has no matching start identity")
@@ -1041,11 +1058,16 @@ def _parse_xml(decoded: Path, summary: str,
                         or pid == diagnostic_unmatched_noncontrolled_pid
                         or bool(parent_value)):
                     raise ValueError("tracerpt process-stop event has no matching start identity")
+                if unmatched_events:
+                    raise ValueError("diagnostic mode permits only one unmatched process stop")
+                unmatched_identity_keys.add(identity_key)
                 unmatched_events.append({
                     "event": "stop", "timestamp_utc": event_timestamp_utc,
                     "pid": pid, "start_time_utc": start_time_utc,
                 })
                 continue
+            if identity_key in stops:
+                raise ValueError("tracerpt process-stop identity is duplicated")
             normalized_name = _normalized_process_name(process_name) if process_name else ""
             parent_pid = _parse_int(parent_value, "ParentId") if parent_value else None
             if normalized_name and normalized_name.casefold() != str(prior["process_name"]).casefold():
@@ -1060,10 +1082,19 @@ def _parse_xml(decoded: Path, summary: str,
             "start_time_utc": start_time_utc,
         }
         if kind == "start":
-            starts[(pid, start_time_utc)] = record
+            starts[identity_key] = record
+        else:
+            stops[identity_key] = record
         events.append(record)
-    if any((item["pid"], item["start_time_utc"]) in starts for item in unmatched_events):
-        raise ValueError("tracerpt process-stop identity has a later matching start")
+    for item in unmatched_events:
+        item_key = (item["pid"], item["start_time_utc"])
+        matching_pid_starts = [key for key in starts if key[0] == item["pid"]]
+        if item_key in matching_pid_starts:
+            raise ValueError("tracerpt process-stop identity has a later matching start")
+        if matching_pid_starts:
+            raise ValueError("tracerpt process-stop identity conflicts with a later PID start")
+    if len(unmatched_events) > 1:
+        raise ValueError("diagnostic mode permits only one unmatched process stop")
     events = _required_event_shape(events)
     metadata = _parse_tracerpt_summary(summary)
     header = _parse_eventtrace_header(root)
@@ -1087,9 +1118,9 @@ def _parse_xml(decoded: Path, summary: str,
     if (observed_event_timestamps
             and metadata.get("coverage_start_utc") is not None
             and metadata.get("coverage_end_utc") is not None):
-        first = min(utc(value) for value in observed_event_timestamps)
-        last = max(utc(value) for value in observed_event_timestamps)
-        if first < utc(metadata["coverage_start_utc"]) or last > utc(metadata["coverage_end_utc"]):
+        first = min(observed_event_ticks)
+        last = max(observed_event_ticks)
+        if first < utc_ticks(metadata["coverage_start_utc"]) or last > utc_ticks(metadata["coverage_end_utc"]):
             raise ValueError("tracerpt events fall outside the independently derived summary coverage")
     observed_process_events = observed_process_start_events + observed_process_stop_events
     metadata["events_received"] = observed_process_events
@@ -1137,8 +1168,9 @@ def _controlled_process_binding(events: list[dict[str, Any]],
     matching_starts = [event for event in pid_starts if creation_match(event)]
     matching_stops = [event for event in pid_stops if creation_match(event)]
     lifecycle_order_valid = (
-        len(matching_starts) == 1 and len(matching_stops) == 1
-        and utc(matching_starts[0]["timestamp_utc"]) <= utc(matching_stops[0]["timestamp_utc"])
+        len(pid_starts) == 1 and len(pid_stops) == 1
+        and len(matching_starts) == 1 and len(matching_stops) == 1
+        and utc_ticks(matching_starts[0]["timestamp_utc"]) <= utc_ticks(matching_stops[0]["timestamp_utc"])
     )
     return {
         "controlled_pid_start_event_count": len(pid_starts),
@@ -1691,7 +1723,7 @@ def _read_collection_metadata(path: Path, raw_path: Path,
         raise ValueError("ETW collection metadata start timestamp is not independently derived")
     if declared_end is not None and _timestamp_text(declared_end, "collection stop timestamp") != end:
         raise ValueError("ETW collection metadata stop timestamp is not independently derived")
-    if utc(end) <= utc(start):
+    if utc_ticks(end) <= utc_ticks(start):
         raise ValueError("ETW collection metadata interval is not positive")
     for field, expected in (("start_observed_utc", start), ("stop_observed_utc", end)):
         if value.get(field) is not None and _timestamp_text(value[field], f"collection {field}") != expected:
@@ -1799,9 +1831,9 @@ def _run_tracerpt(raw_path: Path, tool_path: Path,
             if not counters.get(field):
                 raise ValueError(f"tracerpt summary/collection metadata lacks {field}")
         if events:
-            first = utc(events[0]["timestamp_utc"])
-            last = utc(events[-1]["timestamp_utc"])
-            if first < utc(counters["coverage_start_utc"]) or last > utc(counters["coverage_end_utc"]):
+            first = min(utc_ticks(event["timestamp_utc"]) for event in events)
+            last = max(utc_ticks(event["timestamp_utc"]) for event in events)
+            if first < utc_ticks(counters["coverage_start_utc"]) or last > utc_ticks(counters["coverage_end_utc"]):
                 raise ValueError("tracerpt events fall outside the retained collection interval")
         counters["summary_path"] = str(summary)
         counters["summary_sha256"] = sha256(summary)
@@ -1875,7 +1907,7 @@ def make_receipt(raw_path: Path, coverage_start: str | None = None,
     start = counters["coverage_start_utc"]
     end = counters["coverage_end_utc"]
     derived_session = counters["session_name"]
-    if utc(end) <= utc(start):
+    if utc_ticks(end) <= utc_ticks(start):
         raise ValueError("ETL coverage interval is not positive")
     raw_hash = sha256(raw_path)
     full_digest = event_digest(events)

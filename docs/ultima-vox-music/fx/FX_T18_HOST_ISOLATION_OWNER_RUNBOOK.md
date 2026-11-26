@@ -2,7 +2,9 @@
 
 **Status:** owner review/run authorization only. This source packet does not
 claim owner attestation; it does not deliver `WALL_GATE_PASS`, dispatch a
-Windows job, or authorize qualification.
+Windows job, or authorize qualification. The single future owner-reviewable production
+sequence is [FX_T18_PRODUCTION_QUALIFICATION_PLAN.md](FX_T18_PRODUCTION_QUALIFICATION_PLAN.md);
+it is a plan only and does not authorize execution.
 
 ## 1. Establish exclusive HAMUNAPTRA access
 
@@ -793,7 +795,39 @@ the stop and absence query are retained. Preserve the private directory until
 its hashes and retention status are recorded, then remove it only under the
 separately controlled owner retention procedure.
 
-## 6. Cleanup and retention
+## 6. Retained-artifact offline replay acceptance record
+
+The owner has completed the retained-artifact compatibility acceptance gate on
+HAMUNAPTRA. This record is intentionally limited to sanitized provenance and
+counters; the private ETL, XML, summary, controlled-process receipt, cleanup
+output and identity-bearing artifacts remain outside the repository.
+
+| Field | Owner-verified value |
+|---|---|
+| Windows job | `140167448791` |
+| Actions run | `45895259416` |
+| Operations workflow commit | `c3a708223268a307bbc6bb575c88c86999e43856` |
+| Parser commit/version | `6c364442de8fc355ad42b6c6ec17843a02662240` / `1.10.0` |
+| Result | exit `0`; `OFFLINE_REPLAY_PASS` |
+| Input integrity | original input hashes and unchanged-input integrity verified |
+| Parser/provenance integrity | parser hashes, original cleanup HRESULT and EventTrace Header identity verified |
+| Loss and header | lost events `0`; lost buffers `0`; buffers `6`; capacity `16 MiB`; log mode `0` |
+| Summary | `11` events |
+| Observed process inventory | starts `5`; stops `4`; process events `9` |
+| Reconciled process identities | starts `5`; stops `3`; process events `8` |
+| Diagnostic accounting | unmatched stop `1`; unmatched controlled `0` |
+| Controlled binding | PID start/stop `1/1`; exact creation match `1/1`; lifecycle order and binding valid |
+| Qualification state | diagnostic only; `qualification_prohibited=true`; production receipt `false` |
+
+This closes the retained-artifact offline compatibility acceptance gate only. It
+is not a parser PASS for the current post-acceptance hardening commit, an
+inventory-to-qualification conversion, a `WALL_GATE_PASS`, production
+qualification, approval, merge or release. The current parser hardening keeps
+production parsing fail-closed and requires a new owner-authorized replay if
+its result is to be used as production evidence. No raw private artifact is
+copied into this repository.
+
+## 7. Cleanup and retention
 
 After the owner confirms the capture interval and final hashes, release the
 owner lease through the separately controlled owner procedure. Capture itself

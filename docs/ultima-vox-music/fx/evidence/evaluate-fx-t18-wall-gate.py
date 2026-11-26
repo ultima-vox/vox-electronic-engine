@@ -216,7 +216,9 @@ def _validate_etw_process_events(events: Any, label: str, coverage_start: dateti
     if not isinstance(events, list):
         raise ValueError(f"{label}: authoritative ETW process_events must be a list")
     validated: list[dict[str, Any]] = []
-    previous_time: datetime | None = None
+    previous_ticks: int | None = None
+    coverage_start_ticks = _utc_ticks(coverage_start.isoformat(), f"{label}.coverage_start_utc")
+    coverage_end_ticks = _utc_ticks(coverage_end.isoformat(), f"{label}.coverage_end_utc")
     active: dict[int, tuple[int, int, str]] = {}
     seen_lifecycles: dict[int, tuple[int, int, str]] = {}
     for index, event in enumerate(events):
@@ -230,9 +232,13 @@ def _validate_etw_process_events(events: Any, label: str, coverage_start: dateti
             if field not in event:
                 raise ValueError(f"{prefix}: missing {field}")
         timestamp = _utc(event["timestamp_utc"], f"{prefix}.timestamp_utc")
-        if timestamp < coverage_start or timestamp > coverage_end or (previous_time and timestamp < previous_time):
+        timestamp_ticks = _utc_ticks(event["timestamp_utc"], f"{prefix}.timestamp_utc")
+        if (timestamp < coverage_start or timestamp > coverage_end
+                or timestamp_ticks < coverage_start_ticks
+                or timestamp_ticks > coverage_end_ticks
+                or (previous_ticks is not None and timestamp_ticks < previous_ticks)):
             raise ValueError(f"{prefix}: timestamp is outside or regresses within ETW coverage")
-        previous_time = timestamp
+        previous_ticks = timestamp_ticks
         if (type(event["pid"]) is not int or event["pid"] < 1 or not isinstance(event["process_name"], str)
                 or not event["process_name"] or not isinstance(event["executable_path"], str)
                 or not event["executable_path"] or not SHA256_RE.fullmatch(str(event["executable_sha256"]))
@@ -245,7 +251,8 @@ def _validate_etw_process_events(events: Any, label: str, coverage_start: dateti
                 or any(not SHA256_RE.fullmatch(str(item)) for item in event["service_identity_sha256"])):
             raise ValueError(f"{prefix}: ETW process identity or service decision is incomplete")
         start_time = _utc(event["start_time_utc"], f"{prefix}.start_time_utc")
-        if start_time > timestamp:
+        start_time_ticks = _utc_ticks(event["start_time_utc"], f"{prefix}.start_time_utc")
+        if start_time > timestamp or start_time_ticks > timestamp_ticks:
             raise ValueError(f"{prefix}: process creation time is after its ETW event")
         if _identity_digest(event).casefold() != str(event["identity_digest"]).casefold():
             raise ValueError(f"{prefix}: ETW identity digest does not reconcile")
@@ -262,7 +269,7 @@ def _validate_etw_process_events(events: Any, label: str, coverage_start: dateti
             if active[event["pid"]] != lifecycle:
                 raise ValueError(f"{prefix}: PID stop identity disagrees with its start identity")
             del active[event["pid"]]
-        elif start_time >= coverage_start:
+        elif start_time_ticks >= coverage_start_ticks:
             raise ValueError(f"{prefix}: PID stop has no matching start lifecycle")
         elif event["pid"] in seen_lifecycles:
             if seen_lifecycles[event["pid"]] != lifecycle:
@@ -1132,7 +1139,9 @@ def _validate_private_record(record: Any, label: str, policy_file: dict[str, Any
         if record.get("event") not in {"start", "stop"} or "timestamp_utc" not in record:
             raise ValueError(f"{label}: private process event is malformed")
         event_time = _utc(record["timestamp_utc"], f"{label}.timestamp_utc")
-        if event_time < _utc(record["start_time_utc"], f"{label}.start_time_utc"):
+        event_time_ticks = _utc_ticks(record["timestamp_utc"], f"{label}.timestamp_utc")
+        start_time_ticks = _utc_ticks(record["start_time_utc"], f"{label}.start_time_utc")
+        if event_time < _utc(record["start_time_utc"], f"{label}.start_time_utc") or event_time_ticks < start_time_ticks:
             raise ValueError(f"{label}: private process event precedes process creation")
         if record.get("event_process_name") not in (None, record["process_name"]):
             raise ValueError(f"{label}: provider event name disagrees with the process identity")
@@ -1436,6 +1445,7 @@ def validate_witness(
     if not isinstance(events, list):
         raise ValueError(f"{path}: malformed process event list")
     event_times: list[datetime] = []
+    event_time_ticks: list[int] = []
     for index, event in enumerate(events):
         if not isinstance(event, dict) or event.get("event") not in {"start", "stop", "unparsed"}:
             raise ValueError(f"{path}: malformed process event {index}")
@@ -1446,10 +1456,12 @@ def validate_witness(
         if not isinstance(event.get("identity_digest"), str) or not SHA256_RE.fullmatch(event["identity_digest"]):
             raise ValueError(f"{path}: event identity digest is missing")
         event_time = _utc(event.get("timestamp_utc"), f"process_events[{index}].timestamp_utc")
+        event_ticks = _utc_ticks(event.get("timestamp_utc"), f"process_events[{index}].timestamp_utc")
         if event_time < capture_start or event_time > capture_end:
             raise ValueError(f"{path}: process event lies outside capture interval")
         event_times.append(event_time)
-    if any(right < left for left, right in zip(event_times, event_times[1:])):
+        event_time_ticks.append(event_ticks)
+    if any(right < left for left, right in zip(event_time_ticks, event_time_ticks[1:])):
         raise ValueError(f"{path}: process event timestamps are not monotonic")
 
     private_result: dict[str, Any] | None = None

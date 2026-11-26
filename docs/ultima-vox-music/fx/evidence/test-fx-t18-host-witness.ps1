@@ -31,6 +31,10 @@ if ($parserSource -notmatch 'EVENT_TRACE_PROVIDER_GUID' -or
     $parserSource -notmatch 'nonzero sub-100ns timestamp digits' -or
     $parserSource -notmatch 'diagnostic_unmatched_noncontrolled_pid' -or
     $parserSource -notmatch 'unmatched_process_stop_count' -or
+    $parserSource -notmatch 'event_timestamp_ticks = utc_ticks' -or
+    $parserSource -notmatch 'process-stop identity is duplicated' -or
+    $parserSource -notmatch 'ExitTime precedes its process creation time' -or
+    $parserSource -notmatch 'process stop precedes its matching start' -or
     $parserSource -notmatch 'PartitionInfoExtension' -or
     $parserSource -notmatch 'validated EventTrace_Header' -or
     $parserSource -notmatch 'summary_buffers_processed' -or

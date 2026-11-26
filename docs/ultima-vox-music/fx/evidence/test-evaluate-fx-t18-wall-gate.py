@@ -1223,6 +1223,23 @@ def main() -> int:
         assert near_mismatch_binding["controlled_start_match_count"] == 0
         assert near_mismatch_binding["controlled_stop_match_count"] == 0
         assert near_mismatch_binding["controlled_process_binding_valid"] is False
+        ambiguous_binding_events = [dict(event) for event in nine_digit_events]
+        ambiguous_start = dict(nine_digit_events[0])
+        ambiguous_start.update({
+            "timestamp_utc": "2026-11-22T00:00:10.0000000Z",
+            "start_time_utc": "2026-11-22T00:00:10.0000000Z",
+        })
+        ambiguous_stop = dict(nine_digit_events[1])
+        ambiguous_stop.update({
+            "timestamp_utc": "2026-11-22T00:00:11.0000000Z",
+            "start_time_utc": "2026-11-22T00:00:10.0000000Z",
+        })
+        ambiguous_binding_events.extend((ambiguous_start, ambiguous_stop))
+        ambiguous_binding = EVALUATOR.ETL_PARSER._controlled_process_binding(
+            ambiguous_binding_events, nine_digit_receipt)
+        assert ambiguous_binding["controlled_pid_start_event_count"] == 2
+        assert ambiguous_binding["controlled_pid_stop_event_count"] == 2
+        assert ambiguous_binding["controlled_process_binding_valid"] is False
         nonzero_exit_xml = directory / "tracerpt-nine-digit-nonzero-exit-fraction.xml"
         nonzero_exit_xml.write_text(
             nine_digit_xml.read_text(encoding="utf-8").replace(
@@ -1237,6 +1254,44 @@ def main() -> int:
             pass
         else:
             raise AssertionError("nonzero ExitTime sub-100ns digits were accepted")
+        descending_100ns_xml = directory / "tracerpt-descending-100ns.xml"
+        descending_100ns_xml.write_text(
+            tracerpt_xml.read_text(encoding="utf-8")
+            .replace(
+                'TimeCreated SystemTime="2026-11-22T00:00:01.1234567Z"',
+                'TimeCreated SystemTime="2026-11-22T00:00:01.0000002Z"', 1)
+            .replace(
+                'TimeCreated SystemTime="2026-11-22T00:00:02.1234567Z"',
+                'TimeCreated SystemTime="2026-11-22T00:00:01.0000001Z"', 1)
+            .replace(
+                'Name="ExitTime">2026-11-22T00:00:02.1234567Z',
+                'Name="ExitTime">2026-11-22T00:00:01.0000001Z', 1),
+            encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._parse_xml(
+                descending_100ns_xml,
+                "Total Buffers Processed 6\nTotal Events Processed 11\nTotal Events  Lost      0\n")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("descending 100ns event timestamps were accepted")
+        exit_before_creation_xml = directory / "tracerpt-exit-before-creation.xml"
+        exit_before_creation_xml.write_text(
+            tracerpt_xml.read_text(encoding="utf-8").replace(
+                '<Data Name="CreateTime">2026-11-22T00:00:00.0000000Z</Data>'
+                '<Data Name="ExitTime">2026-11-22T00:00:02.1234567Z</Data>',
+                '<Data Name="CreateTime">2026-11-22T00:00:01.5000000Z</Data>'
+                '<Data Name="ExitTime">2026-11-22T00:00:01.4999999Z</Data>', 1),
+            encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._parse_xml(
+                exit_before_creation_xml,
+                "Total Buffers Processed 6\nTotal Events Processed 11\nTotal Events  Lost      0\n")
+        except ValueError as error:
+            assert "ExitTime" in str(error)
+        else:
+            raise AssertionError("ExitTime before creation was accepted")
+        names.append("tracerpt_integer_100ns_ordering_and_exit_validation")
 
         assert EVALUATOR.ETL_PARSER._tracerpt_xml_timestamp_text(
             "2026-11-22T00:00:00.1234567Z", "seven-digit timestamp") == "2026-11-22T00:00:00.1234567Z"
@@ -1244,6 +1299,22 @@ def main() -> int:
             "2026-11-22T00:00:00.123456700+03:29", "offset timestamp") == "2026-11-21T20:31:00.1234567Z"
         assert EVALUATOR.ETL_PARSER._tracerpt_xml_timestamp_text(
             "2026-11-22T00:00:00.123456800Z", "100ns-distinct timestamp") == "2026-11-22T00:00:00.1234568Z"
+        assert EVALUATOR.ETL_PARSER.utc_ticks(
+            "2026-11-22T00:00:00.0000001Z") < EVALUATOR.ETL_PARSER.utc_ticks(
+                "2026-11-22T00:00:00.0000002Z")
+        try:
+            EVALUATOR.ETL_PARSER._required_event_shape([
+                {"event": "start", "timestamp_utc": "2026-11-22T00:00:00.0000002Z",
+                 "pid": 1, "process_name": "one.exe", "parent_pid": 0,
+                 "start_time_utc": "2026-11-22T00:00:00.0000000Z"},
+                {"event": "stop", "timestamp_utc": "2026-11-22T00:00:00.0000001Z",
+                 "pid": 1, "process_name": "one.exe", "parent_pid": 0,
+                 "start_time_utc": "2026-11-22T00:00:00.0000000Z"},
+            ])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("100ns event ordering regression was accepted")
         for invalid_timestamp in (
                 "2026-11-22T00:00:00.123456701Z",
                 "2026-11-22T00:00:00.123456710Z",
@@ -1358,8 +1429,40 @@ def main() -> int:
             pass
         else:
             raise AssertionError("conflicting process stop identity was accepted")
+        duplicate_stop = '''
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>2</EventID><Version>2</Version><Opcode>2</Opcode><TimeCreated SystemTime="2026-11-22T00:00:10.0000000Z"/></System><EventData><Data Name="ProcessID">5001</Data><Data Name="ImageName">worker1.exe</Data><Data Name="CreateTime">2026-11-22T00:00:03.0000000Z</Data><Data Name="ExitTime">2026-11-22T00:00:10.0000000Z</Data><Data Name="ExitCode">0</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+'''
+        duplicate_stop_xml = directory / "tracerpt-duplicate-stop.xml"
+        duplicate_stop_xml.write_text(
+            unmatched_xml.read_text(encoding="utf-8").replace("</Events>", duplicate_stop + "</Events>"),
+            encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._parse_xml(
+                duplicate_stop_xml, observed_summary,
+                diagnostic_unmatched_noncontrolled_pid=240148)
+        except ValueError as error:
+            assert "duplicated" in str(error)
+        else:
+            raise AssertionError("duplicate process stop identity was accepted")
+        stop_before_start_xml = directory / "tracerpt-stop-before-start.xml"
+        stop_before_start_xml.write_text(
+            '''<Events xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <Event><System><Provider Name="EventTrace" Guid="{68FDD900-4A3E-11D1-84F4-0000F80464E3}"/><EventID>0</EventID><Version>0</Version><Opcode>Header</Opcode></System><EventData><Data Name="MaxFileSize">16</Data><Data Name="LogFileMode">0x0</Data><Data Name="BuffersWritten">6</Data><Data Name="EventsLost">0</Data><Data Name="BuffersLost">0</Data></EventData></Event>
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>2</EventID><Version>2</Version><Opcode>2</Opcode><TimeCreated SystemTime="2026-11-22T00:00:01.0000000Z"/></System><EventData><Data Name="ProcessID">7001</Data><Data Name="CreateTime">2026-11-22T00:00:00.0000000Z</Data><Data Name="ExitTime">2026-11-22T00:00:01.0000000Z</Data><Data Name="ExitCode">0</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>1</EventID><Version>4</Version><Opcode>1</Opcode><TimeCreated SystemTime="2026-11-22T00:00:02.0000000Z"/></System><EventData><Data Name="ProcessID">7001</Data><Data Name="ParentProcessID">2620</Data><Data Name="ImageName">worker-late.exe</Data><Data Name="CreateTime">2026-11-22T00:00:00.0000000Z</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+</Events>''',
+            encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._parse_xml(
+                stop_before_start_xml, observed_summary,
+                diagnostic_unmatched_noncontrolled_pid=240148)
+        except ValueError as error:
+            assert "precedes" in str(error) or "later" in str(error)
+        else:
+            raise AssertionError("stop-before-start identity was accepted")
         names.append("diagnostic_unmatched_noncontrolled_stop_accounting")
         names.append("diagnostic_controlled_unmatched_duplicate_conflict_blocked")
+        names.append("diagnostic_duplicate_stop_and_stop_before_start_blocked")
 
         classic_tracerpt_xml = directory / "tracerpt-classic-eventtrace-shape.xml"
         classic_tracerpt_xml.write_text(
