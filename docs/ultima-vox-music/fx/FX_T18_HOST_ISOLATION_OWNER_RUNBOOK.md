@@ -807,7 +807,7 @@ output and identity-bearing artifacts remain outside the repository.
 | Windows job | `140167448791` |
 | Actions run | `45895259416` |
 | Operations workflow commit | `c3a708223268a307bbc6bb575c88c86999e43856` |
-| Parser commit/version | accepted replay: `6c364442de8fc355ad42b6c6ec17843a02662240` / `1.10.0`; post-acceptance hardening: `b79d517` / `1.11.0` |
+| Parser commit/version | accepted replay: `6c364442de8fc355ad42b6c6ec17843a02662240` / `1.10.0`; post-acceptance hardening: `b79d517b5e6a5bc11168b3331956876126c3e42a` / `1.11.0` |
 | Result | exit `0`; `OFFLINE_REPLAY_PASS` |
 | Input integrity | original input hashes and unchanged-input integrity verified |
 | Parser/provenance integrity | parser hashes, original cleanup HRESULT and EventTrace Header identity verified |
@@ -824,7 +824,7 @@ is not a parser PASS for the current post-acceptance hardening commit, an
 inventory-to-qualification conversion, a `WALL_GATE_PASS`, production
 qualification, approval, merge or release. The current parser hardening keeps
 production parsing fail-closed and requires a new owner-authorized replay if
-its result is to be used as production evidence. On `b79d517` / parser
+its result is to be used as production evidence. On `b79d517b5e6a5bc11168b3331956876126c3e42a` / parser
 `1.11.0`, the local executable wall-gate fixtures and timing-auditor negative
 fixtures passed; those synthetic results are not a replay of the retained
 HAMUNAPTRA artifacts. No raw private artifact is copied into this repository.
