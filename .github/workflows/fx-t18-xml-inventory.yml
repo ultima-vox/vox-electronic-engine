@@ -55,6 +55,18 @@ jobs:
               if hashlib.sha256(data).hexdigest() != "440c973a01723ba85057aa4f721ce68a6364c2fa8a44eca92dec35b5a783e08d":
                   raise ValueError("hash")
               counts = collections.Counter()
+              time_shapes = collections.Counter()
+              def describe_time(field, value):
+                  text = (value or "").strip()
+                  match = re.fullmatch(r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(?:[.,](\d+))?(Z|[+-]\d{2}:?\d{2})", text)
+                  if match:
+                      fraction = match.group(1) or ""
+                      shape = {"field": field, "format": "iso_offset", "fraction_digits": len(fraction), "sub_100ns_nonzero": any(c != "0" for c in fraction[7:]), "separator": "comma" if "," in text else "dot_or_none"}
+                  elif re.fullmatch(r"(?:\d+|0[xX][0-9a-fA-F]+)", text):
+                      shape = {"field": field, "format": "integer_or_filetime"}
+                  else:
+                      shape = {"field": field, "format": "absent" if not text else "other"}
+                  time_shapes[json.dumps(shape, sort_keys=True)] += 1
               known_fields = {x.casefold() for x in ("ProcessId", "NewProcessId", "ParentId", "ParentProcessId", "ParentPID", "ImageName", "ImageFileName", "ProcessName", "CreateTime", "CreationTime", "ProcessCreateTime", "ExitTime", "ExitCode", "ProcessSequenceNumber", "ParentProcessSequenceNumber", "SessionId", "Flags", "CommandLine", "UserSID", "UniqueProcessKey", "MaxFileSize", "LogFileMode", "BuffersWritten", "EventsLost", "BuffersLost")}
               for event in ET.fromstring(data).iter():
                   if local(event.tag) != "event":
@@ -65,6 +77,16 @@ jobs:
                   renderings = children(event, "renderinginfo")
                   extended = children(event, "extendedtracinginfo")
                   fields = [str(d.attrib.get("Name", "")).casefold() for block in children(event, "eventdata") for d in children(block, "data")]
+                  if any(safe_guid(p.attrib.get("Guid")) == "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716" for p in providers):
+                      kind = labels(system, "eventid")
+                      kind = kind[0] if kind in (["1"], ["2"]) else "other"
+                      for node in children(system, "timecreated"):
+                          describe_time("event_" + kind + "_SystemTime", node.attrib.get("SystemTime"))
+                      for block in children(event, "eventdata"):
+                          for node in children(block, "data"):
+                              field = str(node.attrib.get("Name", "")).casefold()
+                              if field in ("createtime", "creationtime", "processcreatetime", "exittime", "timestamp", "timecreated", "eventtime"):
+                                  describe_time("event_" + kind + "_" + field, node.text)
                   rec = {
                       "system_count": len(systems),
                       "provider_guid": [safe_guid(p.attrib.get("Guid")) for p in providers],
@@ -85,6 +107,15 @@ jobs:
               print("xml_event_count=" + str(sum(counts.values())))
               for shape, count in sorted(counts.items()):
                   print("shape=" + json.dumps({"count": count, **json.loads(shape)}, sort_keys=True))
+              receipt_data = (root / "controlled-process.json").read_bytes()
+              original = json.loads((root / "diagnostic-summary.json").read_text(encoding="utf-8-sig"))
+              if hashlib.sha256(receipt_data).hexdigest() != original.get("controlled_process_receipt_sha256"):
+                  raise ValueError("receipt hash")
+              receipt = json.loads(receipt_data.decode("utf-8-sig"))
+              for field in ("creation_time_utc", "launch_observed_utc", "ended_utc"):
+                  describe_time("receipt_" + field, receipt.get(field))
+              for shape, count in sorted(time_shapes.items()):
+                  print("time_shape=" + json.dumps({"count": count, **json.loads(shape)}, sort_keys=True))
               print("XML_INVENTORY_COMPLETE; qualification_prohibited=true")
           try:
               main()
