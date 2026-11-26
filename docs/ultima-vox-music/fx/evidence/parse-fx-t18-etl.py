@@ -47,7 +47,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 FORMAT = "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
-PARSER_VERSION = "1.7.0"
+PARSER_VERSION = "1.8.0"
 PROVIDER = "Microsoft-Windows-Kernel-Process/ETW"
 PROVIDER_GUID = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716"
 EVENT_TRACE_PROVIDER_GUID = "68fdd900-4a3e-11d1-84f4-0000f80464e3"
@@ -893,6 +893,70 @@ def _normalized_process_name(value: str) -> str:
     return re.split(r"[\\/]+", text)[-1] or text
 
 
+def _process_event_identity(event: ET.Element) -> str | None:
+    """Read process identity only from the unique direct System block.
+
+    tracerpt also emits a RenderingInfo/Provider text node. It has no Name or
+    Guid attributes and must never overwrite the System provider identity.
+    """
+    system_nodes = [node for node in list(event)
+                    if node.tag.rsplit("}", 1)[-1].casefold() == "system"]
+
+    def provider_matches(provider: ET.Element) -> bool:
+        name = str(provider.attrib.get("Name", "")).strip().casefold()
+        guid = _normalize_guid(provider.attrib.get("Guid"))
+        return name in PROCESS_PROVIDER_NAMES or guid == PROVIDER_GUID
+
+    if len(system_nodes) != 1:
+        if any(provider_matches(provider)
+               for system in system_nodes
+               for provider in list(system)
+               if provider.tag.rsplit("}", 1)[-1].casefold() == "provider"):
+            raise ValueError("tracerpt process event has an ambiguous System block")
+        return None
+    system = system_nodes[0]
+    provider_nodes = [node for node in list(system)
+                      if node.tag.rsplit("}", 1)[-1].casefold() == "provider"]
+    if len(provider_nodes) != 1:
+        if any(provider_matches(provider) for provider in provider_nodes):
+            raise ValueError("tracerpt process event provider identity is ambiguous")
+        return None
+    provider = provider_nodes[0]
+    provider_name = str(provider.attrib.get("Name", "")).strip().casefold()
+    provider_guid = _normalize_guid(provider.attrib.get("Guid"))
+    name_present = "Name" in provider.attrib
+    guid_present = "Guid" in provider.attrib
+    name_matches = provider_name in PROCESS_PROVIDER_NAMES
+    guid_matches = provider_guid == PROVIDER_GUID
+    if not name_matches and not guid_matches:
+        return None
+    if (name_present and not name_matches) or (guid_present and not guid_matches):
+        raise ValueError("tracerpt process event provider Name/Guid identity contradicts")
+
+    event_id_nodes = [node for node in list(system)
+                      if node.tag.rsplit("}", 1)[-1].casefold() == "eventid"]
+    if len(event_id_nodes) != 1:
+        raise ValueError("tracerpt process event has an ambiguous EventID")
+    event_id = _parse_nonnegative_uint(event_id_nodes[0].text, "tracerpt process EventID")
+    kind = PROCESS_EVENT_IDS.get(event_id)
+    if kind is None:
+        return None
+
+    version_nodes = [node for node in list(system)
+                     if node.tag.rsplit("}", 1)[-1].casefold() == "version"]
+    opcode_nodes = [node for node in list(system)
+                    if node.tag.rsplit("}", 1)[-1].casefold() == "opcode"]
+    if version_nodes or opcode_nodes:
+        if len(version_nodes) != 1 or len(opcode_nodes) != 1:
+            raise ValueError("tracerpt process event has an ambiguous Version/Opcode")
+        version = _parse_nonnegative_uint(version_nodes[0].text, "tracerpt process Version")
+        opcode = _parse_nonnegative_uint(opcode_nodes[0].text, "tracerpt process Opcode")
+        expected = {"start": (4, 1), "stop": (2, 2)}[kind]
+        if (version, opcode) != expected:
+            raise ValueError("tracerpt process event Version/Opcode contradicts its EventID")
+    return kind
+
+
 def _parse_xml(decoded: Path, summary: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     root = ET.parse(decoded).getroot()
     events: list[dict[str, Any]] = []
@@ -900,23 +964,7 @@ def _parse_xml(decoded: Path, summary: str) -> tuple[list[dict[str, Any]], dict[
     for event in root.iter():
         if event.tag.rsplit("}", 1)[-1].casefold() != "event":
             continue
-        provider = None
-        provider_guid = None
-        event_id = None
-        for node in event.iter():
-            tag = node.tag.rsplit("}", 1)[-1].casefold()
-            if tag == "provider":
-                provider = node.attrib.get("Name")
-                provider_guid = node.attrib.get("Guid")
-            elif tag == "eventid":
-                event_id = (node.text or "").strip()
-        if (str(provider or "").casefold() not in PROCESS_PROVIDER_NAMES
-                and str(provider_guid or "").strip("{}").casefold() != PROVIDER_GUID):
-            continue
-        try:
-            kind = PROCESS_EVENT_IDS.get(int(event_id or "-1"))
-        except ValueError:
-            kind = None
+        kind = _process_event_identity(event)
         if kind is None:
             continue
         # Kernel ProcessStart/Stop carries PID, parent PID, image and creation

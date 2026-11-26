@@ -25,6 +25,8 @@ $diagnosticScript = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'diagnos
 $diagnosticSource = Get-Content -LiteralPath $diagnosticScript -Raw
 if ($parserSource -notmatch 'EVENT_TRACE_PROVIDER_GUID' -or
     $parserSource -notmatch 'MSNT_SYSTEM_TRACE_PROVIDER_GUID' -or
+    $parserSource -notmatch '_process_event_identity' -or
+    $parserSource -notmatch 'unique direct System block' -or
     $parserSource -notmatch 'PartitionInfoExtension' -or
     $parserSource -notmatch 'validated EventTrace_Header' -or
     $parserSource -notmatch 'summary_buffers_processed' -or
