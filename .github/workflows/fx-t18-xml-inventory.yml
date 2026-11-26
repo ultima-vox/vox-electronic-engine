@@ -18,6 +18,7 @@ jobs:
           if ($env:COMPUTERNAME -ine 'HAMUNAPTRA') { throw 'BLOCKED: unexpected host' }
           $source = @'
           import collections
+          import datetime
           import hashlib
           import json
           import os
@@ -116,6 +117,82 @@ jobs:
                   describe_time("receipt_" + field, receipt.get(field))
               for shape, count in sorted(time_shapes.items()):
                   print("time_shape=" + json.dumps({"count": count, **json.loads(shape)}, sort_keys=True))
+              def ticks(text):
+                  m = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})", text)
+                  if not m:
+                      raise ValueError("timestamp shape")
+                  fraction = m[2] or ""
+                  if any(c != "0" for c in fraction[7:]):
+                      raise ValueError("timestamp precision")
+                  date = datetime.datetime.fromisoformat(m[1] + ("+00:00" if m[3] == "Z" else m[3])).astimezone(datetime.timezone.utc)
+                  delta = date - datetime.datetime(1, 1, 1, tzinfo=datetime.timezone.utc)
+                  return (delta.days * 86400 + delta.seconds) * 10000000 + int((fraction + "0000000")[:7])
+              def number(text):
+                  try:
+                      return int(text, 0)
+                  except ValueError:
+                      return int(text, 10)
+              records = []
+              trace_headers = []
+              for event in ET.fromstring(data).iter():
+                  if local(event.tag) != "event":
+                      continue
+                  systems = children(event, "system")
+                  if len(systems) != 1:
+                      continue
+                  system = systems[0]
+                  providers = children(system, "provider")
+                  if len(providers) != 1:
+                      continue
+                  fields = {str(n.attrib.get("Name", "")).casefold(): n.text for block in children(event, "eventdata") for n in children(block, "data")}
+                  if safe_guid(providers[0].attrib.get("Guid")) != "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716":
+                      if "bufferswritten" in fields:
+                          trace_headers.append(fields)
+                      continue
+                  kind = labels(system, "eventid")
+                  if kind not in (["1"], ["2"]):
+                      continue
+                  timestamp = ticks(children(system, "timecreated")[0].attrib["SystemTime"])
+                  records.append({"kind": kind[0], "pid": number(fields["processid"]), "created": ticks(fields["createtime"]), "time": timestamp, "seq": number(fields["processsequencenumber"]), "parent_present": bool(fields.get("parentprocessid") or fields.get("parentid")), "image": (fields.get("imagename") or "").replace("\\", "/").split("/")[-1].casefold(), "exit": ticks(fields["exittime"]) if fields.get("exittime") else None})
+              starts = [x for x in records if x["kind"] == "1"]
+              stops = [x for x in records if x["kind"] == "2"]
+              controlled_pid = receipt["pid"]
+              controlled_created = ticks(receipt["creation_time_utc"])
+              stats = collections.Counter()
+              earliest = min(x["time"] for x in records)
+              for i, stop_record in enumerate(records):
+                  if stop_record["kind"] != "2":
+                      continue
+                  same_pid = [x for x in starts if x["pid"] == stop_record["pid"]]
+                  exact = [x for x in same_pid if x["created"] == stop_record["created"]]
+                  prior = [x for x in records[:i] if x["kind"] == "1" and x["pid"] == stop_record["pid"] and x["created"] == stop_record["created"]]
+                  seq = [x for x in starts if x["seq"] == stop_record["seq"]]
+                  controlled = stop_record["pid"] == controlled_pid
+                  stats["stop_total"] += 1
+                  stats["stop_with_exact_prior_start"] += bool(prior)
+                  stats["stop_with_exact_start_anywhere"] += bool(exact)
+                  stats["stop_with_same_pid_anywhere"] += bool(same_pid)
+                  stats["stop_with_same_sequence_anywhere"] += bool(seq)
+                  stats["stop_with_exact_start_and_matching_sequence"] += any(x["seq"] == stop_record["seq"] for x in exact)
+                  stats["stop_with_exact_start_and_matching_image"] += any(x["image"] == stop_record["image"] for x in exact)
+                  stats["stop_without_exact_prior_start"] += not prior
+                  if not prior:
+                      stats["unmatched_stop_with_same_pid"] += bool(same_pid)
+                      stats["unmatched_stop_with_same_sequence"] += bool(seq)
+                      stats["unmatched_stop_before_first_observed_event_creation"] += stop_record["created"] < earliest
+                      stats["unmatched_stop_missing_parent"] += not stop_record["parent_present"]
+                      stats["unmatched_stop_controlled_pid"] += controlled
+                      stats["unmatched_stop_exact_start_later"] += bool(exact)
+                  stats["stop_exit_before_creation"] += stop_record["exit"] is not None and stop_record["exit"] < stop_record["created"]
+              for kind, items in (("start", starts), ("stop", stops)):
+                  stats["controlled_pid_" + kind] = sum(x["pid"] == controlled_pid for x in items)
+                  stats["controlled_exact_creation_" + kind] = sum(x["pid"] == controlled_pid and x["created"] == controlled_created for x in items)
+                  stats["controlled_within_one_second_" + kind] = sum(x["pid"] == controlled_pid and abs(x["created"] - controlled_created) <= 10000000 for x in items)
+              stats["nonmonotonic_event_pairs"] = sum(a["time"] > b["time"] for a,b in zip(records,records[1:]))
+              stats["duplicate_start_identity"] = len(starts) - len({(x["pid"], x["created"]) for x in starts})
+              stats["start_total"] = len(starts)
+              stats["stop_total"] = len(stops)
+              print("lifecycle_counts=" + json.dumps(dict(stats), sort_keys=True))
               print("XML_INVENTORY_COMPLETE; qualification_prohibited=true")
           try:
               main()
