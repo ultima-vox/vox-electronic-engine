@@ -109,29 +109,40 @@ jobs:
                   if before != {n: sha(p) for n, p in paths.items()}:
                       stop("input integrity changed")
                   print("parser_exit_code=" + str(result.returncode), flush=True)
-                  if result.returncode != 0 or not output.is_file():
-                      reason = result.stderr.decode("utf-8", errors="replace")
-                      if "Events Lost/Buffers Lost counters are absent" in reason:
-                          stop("parser loss-counter fields absent")
-                      if "EventTrace" in reason and ("Header" in reason or "header" in reason):
-                          stop("parser EventTrace header identity or fields rejected")
-                      if "controlled" in reason.casefold():
-                          stop("parser controlled-process evidence rejected")
-                      stop("parser rejected retained evidence")
+                  reason = result.stderr.decode("utf-8", errors="replace")
+                  categories = [
+                      ("controlled process PID/creation-time binding failed", "controlled lifecycle binding failed"),
+                      ("controlled-process receipt format is not supported", "controlled receipt format rejected"),
+                      ("controlled-process receipt PID is invalid", "controlled receipt PID invalid"),
+                      ("controlled-process receipt does not prove a clean timeout exit", "controlled receipt exit invalid"),
+                      ("requires the retained controlled-process receipt", "controlled receipt unavailable"),
+                      ("Events Lost/Buffers Lost counters are absent", "loss-counter fields absent"),
+                  ]
+                  failure_category = next((category for marker, category in categories if marker in reason), "parser rejected retained evidence")
+                  if not output.is_file():
+                      print("diagnostic_report_present=false", flush=True)
+                      if failure_category == "parser rejected retained evidence" and "EventTrace" in reason:
+                          failure_category = "EventTrace header identity or fields rejected"
+                      stop(failure_category if result.returncode else "parser report missing")
+                  print("diagnostic_report_present=true", flush=True)
                   report = json_read(output)
                   required = {"controlled_process_binding_valid": True, "controlled_start_match_count": 1, "controlled_stop_match_count": 1, "controlled_lifecycle_order_valid": True, "lost_events": 0, "buffer_loss_events": 0, "buffers_written": 6, "max_file_size_mb": 16, "log_file_mode": 0, "qualification_prohibited": True, "diagnostic_only": True, "production_receipt_created": False}
-                  header = report.get("eventtrace_header", {})
-                  for k, v in required.items():
+                  extra_counts = ["controlled_pid_start_event_count", "controlled_pid_stop_event_count", "process_start_events", "process_stop_events", "events_received", "summary_buffers_processed", "summary_events_processed"]
+                  for k in list(required) + extra_counts:
                       actual = report.get(k)
                       print(k + "=" + (json.dumps(actual) if type(actual) in (int, bool) else "missing_or_invalid"), flush=True)
-                      if type(actual) != type(v) or actual != v:
-                          stop("diagnostic result mismatch")
-                  if header.get("opcode") != "Header" or type(header.get("version")) is not int or header["version"] not in (0, 2):
-                      stop("header identity mismatch")
-                  for field, name in [("raw_etl_sha256", "compat.etl"), ("decoded_xml_sha256", "tracerpt-output.xml"), ("summary_sha256", "tracerpt-summary.txt"), ("controlled_process_receipt_sha256", "controlled-process.json")]:
-                      if report.get(field) != before[name]:
-                          stop("parser input hash mismatch")
-                  print("input_integrity_unchanged=true; parser_hashes_verified=true; header_identity_verified=true")
+                  header = report.get("eventtrace_header", {})
+                  header_valid = header.get("opcode") == "Header" and type(header.get("version")) is int and header["version"] in (0, 2)
+                  hashes_valid = all(report.get(field) == before[name] for field, name in [("raw_etl_sha256", "compat.etl"), ("decoded_xml_sha256", "tracerpt-output.xml"), ("summary_sha256", "tracerpt-summary.txt"), ("controlled_process_receipt_sha256", "controlled-process.json")])
+                  print("input_integrity_unchanged=true", flush=True)
+                  print("parser_hashes_verified=" + json.dumps(hashes_valid), flush=True)
+                  print("header_identity_verified=" + json.dumps(header_valid), flush=True)
+                  if not hashes_valid or not header_valid:
+                      stop("parser report integrity or header mismatch")
+                  if result.returncode != 0:
+                      stop(failure_category)
+                  if any(type(report.get(k)) != type(v) or report.get(k) != v for k, v in required.items()):
+                      stop("diagnostic result mismatch")
                   print("OFFLINE_REPLAY_PASS; qualification_prohibited=true")
 
           try:
