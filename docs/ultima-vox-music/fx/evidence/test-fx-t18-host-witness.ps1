@@ -29,6 +29,8 @@ if ($parserSource -notmatch 'EVENT_TRACE_PROVIDER_GUID' -or
     $parserSource -notmatch 'unique direct System block' -or
     $parserSource -notmatch '_tracerpt_xml_timestamp_text' -or
     $parserSource -notmatch 'nonzero sub-100ns timestamp digits' -or
+    $parserSource -notmatch 'diagnostic_unmatched_noncontrolled_pid' -or
+    $parserSource -notmatch 'unmatched_process_stop_count' -or
     $parserSource -notmatch 'PartitionInfoExtension' -or
     $parserSource -notmatch 'validated EventTrace_Header' -or
     $parserSource -notmatch 'summary_buffers_processed' -or

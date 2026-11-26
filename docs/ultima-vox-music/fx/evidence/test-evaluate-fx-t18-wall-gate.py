@@ -759,6 +759,12 @@ def main() -> int:
             raise AssertionError(f"compatibility diagnostic CLI failed: {diagnostic_cli.stderr}")
         diagnostic_value = json.loads(compatibility_output.read_text(encoding="utf-8"))
         if (diagnostic_value.get("events_received") != 2
+                or diagnostic_value.get("observed_process_events") != 2
+                or diagnostic_value.get("observed_process_start_events") != 1
+                or diagnostic_value.get("observed_process_stop_events") != 1
+                or diagnostic_value.get("reconciled_process_events") != 2
+                or diagnostic_value.get("unmatched_process_stop_count") != 0
+                or diagnostic_value.get("unmatched_controlled_event_count") != 0
                 or diagnostic_value.get("lost_events") != 0
                 or diagnostic_value.get("buffer_loss_events") != 0
                 or diagnostic_value.get("controlled_process_binding_valid") is not True
@@ -1205,6 +1211,18 @@ def main() -> int:
         assert nine_digit_binding["controlled_start_match_count"] == 1
         assert nine_digit_binding["controlled_stop_match_count"] == 1
         assert nine_digit_binding["controlled_process_binding_valid"] is True
+        near_mismatch_receipt = directory / "near-mismatch-controlled-process.json"
+        near_mismatch_receipt.write_text(json.dumps({
+            "format": "VOX_FX_T18_CONTROLLED_PROCESS_RECEIPT_V1",
+            "pid": 240148,
+            "creation_time_utc": "2026-11-22T00:00:00.0000001Z",
+            "exit_code": 0,
+        }), encoding="utf-8")
+        near_mismatch_binding = EVALUATOR.ETL_PARSER._controlled_process_binding(
+            nine_digit_events, near_mismatch_receipt)
+        assert near_mismatch_binding["controlled_start_match_count"] == 0
+        assert near_mismatch_binding["controlled_stop_match_count"] == 0
+        assert near_mismatch_binding["controlled_process_binding_valid"] is False
         nonzero_exit_xml = directory / "tracerpt-nine-digit-nonzero-exit-fraction.xml"
         nonzero_exit_xml.write_text(
             nine_digit_xml.read_text(encoding="utf-8").replace(
@@ -1246,6 +1264,102 @@ def main() -> int:
                 raise AssertionError("strict canonical timestamp parser accepted nine fractional digits")
         names.append("tracerpt_nine_digit_zero_fraction_normalized")
         names.append("tracerpt_timestamp_precision_fail_closed")
+
+        unmatched_xml = directory / "tracerpt-observed-5-start-4-stop.xml"
+        extra_process_events = '''
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>1</EventID><Version>4</Version><Opcode>1</Opcode><TimeCreated SystemTime="2026-11-22T00:00:03.0000000Z"/></System><EventData><Data Name="ProcessID">5001</Data><Data Name="ParentProcessID">2620</Data><Data Name="ImageName">worker1.exe</Data><Data Name="CreateTime">2026-11-22T00:00:03.0000000Z</Data><Data Name="ProcessSequenceNumber">501</Data><Data Name="ParentProcessSequenceNumber">1</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>2</EventID><Version>2</Version><Opcode>2</Opcode><TimeCreated SystemTime="2026-11-22T00:00:04.0000000Z"/></System><EventData><Data Name="ProcessID">5001</Data><Data Name="ImageName">worker1.exe</Data><Data Name="CreateTime">2026-11-22T00:00:03.0000000Z</Data><Data Name="ExitTime">2026-11-22T00:00:04.0000000Z</Data><Data Name="ExitCode">0</Data><Data Name="ProcessSequenceNumber">501</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>1</EventID><Version>4</Version><Opcode>1</Opcode><TimeCreated SystemTime="2026-11-22T00:00:05.0000000Z"/></System><EventData><Data Name="ProcessID">5002</Data><Data Name="ParentProcessID">2620</Data><Data Name="ImageName">worker2.exe</Data><Data Name="CreateTime">2026-11-22T00:00:05.0000000Z</Data><Data Name="ProcessSequenceNumber">502</Data><Data Name="ParentProcessSequenceNumber">1</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>2</EventID><Version>2</Version><Opcode>2</Opcode><TimeCreated SystemTime="2026-11-22T00:00:06.0000000Z"/></System><EventData><Data Name="ProcessID">5002</Data><Data Name="ImageName">worker2.exe</Data><Data Name="CreateTime">2026-11-22T00:00:05.0000000Z</Data><Data Name="ExitTime">2026-11-22T00:00:06.0000000Z</Data><Data Name="ExitCode">0</Data><Data Name="ProcessSequenceNumber">502</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>1</EventID><Version>4</Version><Opcode>1</Opcode><TimeCreated SystemTime="2026-11-22T00:00:07.0000000Z"/></System><EventData><Data Name="ProcessID">5003</Data><Data Name="ParentProcessID">2620</Data><Data Name="ImageName">worker3.exe</Data><Data Name="CreateTime">2026-11-22T00:00:07.0000000Z</Data><Data Name="ProcessSequenceNumber">503</Data><Data Name="ParentProcessSequenceNumber">1</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>1</EventID><Version>4</Version><Opcode>1</Opcode><TimeCreated SystemTime="2026-11-22T00:00:08.0000000Z"/></System><EventData><Data Name="ProcessID">5004</Data><Data Name="ParentProcessID">2620</Data><Data Name="ImageName">worker4.exe</Data><Data Name="CreateTime">2026-11-22T00:00:08.0000000Z</Data><Data Name="ProcessSequenceNumber">504</Data><Data Name="ParentProcessSequenceNumber">1</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>2</EventID><Version>2</Version><Opcode>2</Opcode><TimeCreated SystemTime="2026-11-22T00:00:09.0000000Z"/></System><EventData><Data Name="ProcessID">5999</Data><Data Name="CreateTime">2026-11-21T23:59:59.0000000Z</Data><Data Name="ExitTime">2026-11-22T00:00:09.0000000Z</Data><Data Name="ExitCode">0</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+'''
+        unmatched_xml.write_text(
+            tracerpt_xml.read_text(encoding="utf-8").replace("</Events>", extra_process_events + "</Events>"),
+            encoding="utf-8")
+        observed_summary = "Total Buffers Processed 6\nTotal Events Processed 11\nTotal Events  Lost      0\n"
+        try:
+            EVALUATOR.ETL_PARSER._parse_xml(unmatched_xml, observed_summary)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("production XML parser accepted an unmatched stop")
+        observed_events, observed_metadata = EVALUATOR.ETL_PARSER._parse_xml(
+            unmatched_xml, observed_summary, diagnostic_unmatched_noncontrolled_pid=240148)
+        assert len(observed_events) == 8
+        assert observed_metadata["observed_process_start_events"] == 5
+        assert observed_metadata["observed_process_stop_events"] == 4
+        assert observed_metadata["observed_process_events"] == 9
+        assert observed_metadata["reconciled_process_start_events"] == 5
+        assert observed_metadata["reconciled_process_stop_events"] == 3
+        assert observed_metadata["reconciled_process_events"] == 8
+        assert observed_metadata["unmatched_process_event_count"] == 1
+        assert observed_metadata["unmatched_process_stop_count"] == 1
+        assert observed_metadata["unmatched_controlled_event_count"] == 0
+        unmatched_raw = directory / "observed-5-start-4-stop.etl"
+        unmatched_raw.write_bytes(b"diagnostic-only raw ETL placeholder")
+        unmatched_summary = directory / "observed-5-start-4-stop-summary.txt"
+        unmatched_summary.write_text(observed_summary, encoding="utf-8")
+        unmatched_controlled = directory / "observed-5-start-4-stop-controlled.json"
+        unmatched_controlled.write_text(json.dumps({
+            "format": "VOX_FX_T18_CONTROLLED_PROCESS_RECEIPT_V1",
+            "pid": 240148,
+            "creation_time_utc": "2026-11-22T00:00:00.0000000Z",
+            "exit_code": 0,
+        }), encoding="utf-8")
+        unmatched_report = EVALUATOR.ETL_PARSER.make_compatibility_diagnostic(
+            unmatched_raw, unmatched_xml, unmatched_summary, unmatched_controlled)
+        assert unmatched_report["events_received"] == 9
+        assert unmatched_report["process_start_events"] == 5
+        assert unmatched_report["process_stop_events"] == 4
+        assert unmatched_report["reconciled_process_events"] == 8
+        assert unmatched_report["unmatched_process_stop_count"] == 1
+        assert unmatched_report["unmatched_controlled_event_count"] == 0
+        assert unmatched_report["controlled_process_binding_valid"] is True
+        try:
+            EVALUATOR.ETL_PARSER._parse_xml(
+                unmatched_xml, observed_summary,
+                diagnostic_unmatched_noncontrolled_pid=5999)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("controlled unmatched stop was accepted")
+        duplicate_start = '''
+  <Event><System><Provider Name="Microsoft-Windows-Kernel-Process" Guid="{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}"/><EventID>1</EventID><Version>4</Version><Opcode>1</Opcode><TimeCreated SystemTime="2026-11-22T00:00:10.0000000Z"/></System><EventData><Data Name="ProcessID">5001</Data><Data Name="ParentProcessID">2620</Data><Data Name="ImageName">worker1.exe</Data><Data Name="CreateTime">2026-11-22T00:00:03.0000000Z</Data></EventData><RenderingInfo><Provider>Microsoft-Windows-Kernel-Process</Provider></RenderingInfo></Event>
+'''
+        duplicate_xml = directory / "tracerpt-duplicate-start.xml"
+        duplicate_xml.write_text(
+            unmatched_xml.read_text(encoding="utf-8").replace("</Events>", duplicate_start + "</Events>"),
+            encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._parse_xml(
+                duplicate_xml, observed_summary,
+                diagnostic_unmatched_noncontrolled_pid=240148)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("duplicate process start identity was accepted")
+        conflicting_stop_xml = directory / "tracerpt-conflicting-stop.xml"
+        conflicting_stop_xml.write_text(
+            unmatched_xml.read_text(encoding="utf-8").replace(
+                '<Data Name="ProcessID">5001</Data><Data Name="ImageName">worker1.exe</Data>'
+                '<Data Name="CreateTime">2026-11-22T00:00:03.0000000Z</Data>'
+                '<Data Name="ExitTime">2026-11-22T00:00:04.0000000Z</Data>',
+                '<Data Name="ProcessID">5001</Data><Data Name="ImageName">conflict.exe</Data>'
+                '<Data Name="CreateTime">2026-11-22T00:00:03.0000000Z</Data>'
+                '<Data Name="ExitTime">2026-11-22T00:00:04.0000000Z</Data>', 1),
+            encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._parse_xml(
+                conflicting_stop_xml, observed_summary,
+                diagnostic_unmatched_noncontrolled_pid=240148)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("conflicting process stop identity was accepted")
+        names.append("diagnostic_unmatched_noncontrolled_stop_accounting")
+        names.append("diagnostic_controlled_unmatched_duplicate_conflict_blocked")
 
         classic_tracerpt_xml = directory / "tracerpt-classic-eventtrace-shape.xml"
         classic_tracerpt_xml.write_text(

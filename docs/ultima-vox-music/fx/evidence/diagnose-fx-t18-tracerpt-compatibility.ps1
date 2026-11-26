@@ -536,6 +536,13 @@ if ($collectionReady) {
                         [int]$parserDiagnosticValue.controlled_start_match_count -eq 1 -and
                         [int]$parserDiagnosticValue.controlled_stop_match_count -eq 1 -and
                         [int]$parserDiagnosticValue.events_received -gt 0 -and
+                        [int]$parserDiagnosticValue.observed_process_events -eq [int]$parserDiagnosticValue.events_received -and
+                        [int]$parserDiagnosticValue.observed_process_start_events -eq [int]$parserDiagnosticValue.process_start_events -and
+                        [int]$parserDiagnosticValue.observed_process_stop_events -eq [int]$parserDiagnosticValue.process_stop_events -and
+                        [int]$parserDiagnosticValue.reconciled_process_events -ge 0 -and
+                        [int]$parserDiagnosticValue.reconciled_process_events -le [int]$parserDiagnosticValue.events_received -and
+                        [int]$parserDiagnosticValue.unmatched_process_stop_count -ge 0 -and
+                        [int]$parserDiagnosticValue.unmatched_controlled_event_count -eq 0 -and
                         [int]$parserDiagnosticValue.process_start_events -gt 0 -and
                         [int]$parserDiagnosticValue.process_stop_events -gt 0 -and
                         [int]$parserDiagnosticValue.lost_events -eq 0 -and

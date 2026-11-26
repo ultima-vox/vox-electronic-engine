@@ -28,8 +28,11 @@ compatibility-only path: with the original ``--etl`` it applies the production
 XML/summary field and counter parser to retained outputs from an exact,
 signature-checked decoder,
 binds the observed process start/stop to the private controlled-process PID
-and creation-time receipt, and never creates a production receipt or relaxes
-the pinned version/hash gate.
+and creation-time receipt, reports observed versus fully reconciled process
+counts, and may represent an unmatched noncontrolled stop with no parent only
+in this diagnostic mode. Production parsing remains fail-closed and the
+compatibility path never creates a production receipt or relaxes the pinned
+version/hash gate.
 """
 from __future__ import annotations
 
@@ -47,7 +50,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 FORMAT = "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
-PARSER_VERSION = "1.9.0"
+PARSER_VERSION = "1.10.0"
 PROVIDER = "Microsoft-Windows-Kernel-Process/ETW"
 PROVIDER_GUID = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716"
 EVENT_TRACE_PROVIDER_GUID = "68fdd900-4a3e-11d1-84f4-0000f80464e3"
@@ -89,7 +92,6 @@ SUMMARY_AND_CONTROL_SESSION_SOURCE = "tracerpt -summary and validated logman ses
 CONTROL_SESSION_SOURCE = "validated logman session receipt"
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 MAX_EVENT_CORRELATION_SKEW_SECONDS = 2.0
-DIAGNOSTIC_PROCESS_TIME_TOLERANCE_SECONDS = 1.0
 
 
 def sha256(path: Path) -> str:
@@ -975,16 +977,31 @@ def _process_event_identity(event: ET.Element) -> str | None:
     return kind
 
 
-def _parse_xml(decoded: Path, summary: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _parse_xml(decoded: Path, summary: str,
+               diagnostic_unmatched_noncontrolled_pid: int | None = None
+               ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     root = ET.parse(decoded).getroot()
     events: list[dict[str, Any]] = []
     starts: dict[tuple[int, str], dict[str, Any]] = {}
+    unmatched_events: list[dict[str, Any]] = []
+    observed_event_timestamps: list[str] = []
+    observed_process_start_events = 0
+    observed_process_stop_events = 0
     for event in root.iter():
         if event.tag.rsplit("}", 1)[-1].casefold() != "event":
             continue
         kind = _process_event_identity(event)
         if kind is None:
             continue
+        if kind == "start":
+            observed_process_start_events += 1
+        else:
+            observed_process_stop_events += 1
+        event_timestamp_utc = _event_time(event)
+        observed_event_timestamps.append(event_timestamp_utc)
+        if (len(observed_event_timestamps) > 1
+                and utc(event_timestamp_utc) < utc(observed_event_timestamps[-2])):
+            raise ValueError("tracerpt process events are not monotonic")
         # Kernel ProcessStart/Stop carries PID, parent PID, image and creation
         # time. Path/hash/service/ancestry are populated by the owner-side
         # identity join and are required by the evaluator before correlation.
@@ -1007,33 +1024,46 @@ def _parse_xml(decoded: Path, summary: str) -> tuple[list[dict[str, Any]], dict[
             normalized_name = _normalized_process_name(process_name)
             if not normalized_name:
                 raise ValueError("tracerpt process-start event has an empty ImageName")
+            if prior is not None:
+                raise ValueError("tracerpt process-start identity is duplicated")
         else:
             # Kernel-Process stop records commonly contain only ProcessID,
             # CreateTime, ExitTime and ExitCode. Reconcile their identity from
             # the matching start event instead of inventing a parent or name.
-            # If a build repeats those fields, require agreement before using
-            # the start record as the canonical lifecycle identity.
-            if prior is None and (not process_name or not parent_value):
-                raise ValueError("tracerpt process-stop event has no matching start identity")
+            # Diagnostic compatibility mode may retain one unmatched stop only
+            # when it is noncontrolled and lacks a parent; production parsing
+            # remains fail-closed for every unmatched stop.
+            if prior is None:
+                if (diagnostic_unmatched_noncontrolled_pid is not None
+                        and pid == diagnostic_unmatched_noncontrolled_pid):
+                    raise ValueError("controlled process stop has no matching start identity")
+                if (diagnostic_unmatched_noncontrolled_pid is None
+                        or pid == diagnostic_unmatched_noncontrolled_pid
+                        or bool(parent_value)):
+                    raise ValueError("tracerpt process-stop event has no matching start identity")
+                unmatched_events.append({
+                    "event": "stop", "timestamp_utc": event_timestamp_utc,
+                    "pid": pid, "start_time_utc": start_time_utc,
+                })
+                continue
             normalized_name = _normalized_process_name(process_name) if process_name else ""
             parent_pid = _parse_int(parent_value, "ParentId") if parent_value else None
-            if prior is not None:
-                if normalized_name and normalized_name.casefold() != str(prior["process_name"]).casefold():
-                    raise ValueError("tracerpt process-stop ImageName disagrees with its start event")
-                if parent_pid is not None and parent_pid != prior["parent_pid"]:
-                    raise ValueError("tracerpt process-stop ParentProcessID disagrees with its start event")
-                normalized_name = prior["process_name"]
-                parent_pid = prior["parent_pid"]
-            if not normalized_name or parent_pid is None:
-                raise ValueError("tracerpt process-stop event has incomplete process identity")
+            if normalized_name and normalized_name.casefold() != str(prior["process_name"]).casefold():
+                raise ValueError("tracerpt process-stop ImageName disagrees with its start event")
+            if parent_pid is not None and parent_pid != prior["parent_pid"]:
+                raise ValueError("tracerpt process-stop ParentProcessID disagrees with its start event")
+            normalized_name = prior["process_name"]
+            parent_pid = prior["parent_pid"]
         record = {
-            "event": kind, "timestamp_utc": _event_time(event), "pid": pid,
+            "event": kind, "timestamp_utc": event_timestamp_utc, "pid": pid,
             "process_name": normalized_name, "parent_pid": parent_pid,
             "start_time_utc": start_time_utc,
         }
         if kind == "start":
             starts[(pid, start_time_utc)] = record
         events.append(record)
+    if any((item["pid"], item["start_time_utc"]) in starts for item in unmatched_events):
+        raise ValueError("tracerpt process-stop identity has a later matching start")
     events = _required_event_shape(events)
     metadata = _parse_tracerpt_summary(summary)
     header = _parse_eventtrace_header(root)
@@ -1054,12 +1084,27 @@ def _parse_xml(decoded: Path, summary: str) -> tuple[list[dict[str, Any]], dict[
     metadata["log_file_mode"] = header["log_file_mode"]
     metadata["buffers_written"] = header["buffers_written"]
     metadata["eventtrace_header"] = header
-    if events and metadata.get("coverage_start_utc") is not None and metadata.get("coverage_end_utc") is not None:
-        first = utc(events[0]["timestamp_utc"])
-        last = utc(events[-1]["timestamp_utc"])
+    if (observed_event_timestamps
+            and metadata.get("coverage_start_utc") is not None
+            and metadata.get("coverage_end_utc") is not None):
+        first = min(utc(value) for value in observed_event_timestamps)
+        last = max(utc(value) for value in observed_event_timestamps)
         if first < utc(metadata["coverage_start_utc"]) or last > utc(metadata["coverage_end_utc"]):
             raise ValueError("tracerpt events fall outside the independently derived summary coverage")
-    metadata["events_received"] = len(events)
+    observed_process_events = observed_process_start_events + observed_process_stop_events
+    metadata["events_received"] = observed_process_events
+    metadata["observed_process_events"] = observed_process_events
+    metadata["observed_process_start_events"] = observed_process_start_events
+    metadata["observed_process_stop_events"] = observed_process_stop_events
+    metadata["reconciled_process_events"] = len(events)
+    metadata["reconciled_process_start_events"] = sum(1 for event in events if event["event"] == "start")
+    metadata["reconciled_process_stop_events"] = sum(1 for event in events if event["event"] == "stop")
+    metadata["unmatched_process_event_count"] = len(unmatched_events)
+    metadata["unmatched_process_stop_count"] = sum(1 for event in unmatched_events if event["event"] == "stop")
+    metadata["unmatched_controlled_event_count"] = sum(
+        1 for event in unmatched_events
+        if diagnostic_unmatched_noncontrolled_pid is not None
+        and event["pid"] == diagnostic_unmatched_noncontrolled_pid)
     return events, metadata
 
 
@@ -1080,15 +1125,14 @@ def _read_controlled_process_receipt(path: Path) -> tuple[int, str]:
 def _controlled_process_binding(events: list[dict[str, Any]],
                                 controlled_process_path: Path) -> dict[str, Any]:
     pid, creation_time = _read_controlled_process_receipt(controlled_process_path)
-    expected_creation = utc(creation_time)
+    expected_creation_ticks = utc_ticks(creation_time)
     pid_starts = [event for event in events
                   if event["event"] == "start" and event["pid"] == pid]
     pid_stops = [event for event in events
                  if event["event"] == "stop" and event["pid"] == pid]
 
     def creation_match(event: dict[str, Any]) -> bool:
-        delta = abs((utc(event["start_time_utc"]) - expected_creation).total_seconds())
-        return delta <= DIAGNOSTIC_PROCESS_TIME_TOLERANCE_SECONDS
+        return utc_ticks(event["start_time_utc"]) == expected_creation_ticks
 
     matching_starts = [event for event in pid_starts if creation_match(event)]
     matching_stops = [event for event in pid_stops if creation_match(event)]
@@ -1121,9 +1165,10 @@ def make_compatibility_diagnostic(raw_etl: Path, decoded_xml: Path, summary_path
             or not controlled_process_path.is_file()):
         raise ValueError("compatibility diagnostic requires retained ETL, XML, summary and controlled-process artifacts")
     summary = _read_summary_text(summary_path)
-    events, counters = _parse_xml(decoded_xml, summary)
-    starts = sum(1 for event in events if event["event"] == "start")
-    stops = sum(1 for event in events if event["event"] == "stop")
+    controlled_pid, _ = _read_controlled_process_receipt(controlled_process_path)
+    events, counters = _parse_xml(
+        decoded_xml, summary,
+        diagnostic_unmatched_noncontrolled_pid=controlled_pid)
     binding = _controlled_process_binding(events, controlled_process_path)
     return {
         "format": "VOX_FX_T18_TRACERPT_COMPATIBILITY_DIAGNOSTIC_V1",
@@ -1141,9 +1186,18 @@ def make_compatibility_diagnostic(raw_etl: Path, decoded_xml: Path, summary_path
         "summary_sha256": sha256(summary_path),
         "controlled_process_path": str(controlled_process_path.resolve()),
         "process_event_shape_valid": True,
-        "process_start_events": starts,
-        "process_stop_events": stops,
-        "events_received": counters["events_received"],
+        "process_start_events": counters["observed_process_start_events"],
+        "process_stop_events": counters["observed_process_stop_events"],
+        "events_received": counters["observed_process_events"],
+        "observed_process_events": counters["observed_process_events"],
+        "observed_process_start_events": counters["observed_process_start_events"],
+        "observed_process_stop_events": counters["observed_process_stop_events"],
+        "reconciled_process_events": counters["reconciled_process_events"],
+        "reconciled_process_start_events": counters["reconciled_process_start_events"],
+        "reconciled_process_stop_events": counters["reconciled_process_stop_events"],
+        "unmatched_process_event_count": counters["unmatched_process_event_count"],
+        "unmatched_process_stop_count": counters["unmatched_process_stop_count"],
+        "unmatched_controlled_event_count": counters["unmatched_controlled_event_count"],
         "lost_events": counters["lost_events"],
         "buffer_loss_events": counters["buffer_loss_events"],
         "max_file_size_mb": counters["max_file_size_mb"],

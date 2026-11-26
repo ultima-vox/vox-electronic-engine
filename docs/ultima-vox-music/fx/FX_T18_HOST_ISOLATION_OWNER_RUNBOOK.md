@@ -753,15 +753,19 @@ Get-Content -LiteralPath $replayReport -Raw | ConvertFrom-Json | Format-List
 The script performs that parser invocation itself; the command above documents
 the exact field/counter/binding test and is not a second decoder run. The
 parser diagnostic applies the production XML/summary field shape, binds exactly
-one observed start and stop to the private controlled PID plus creation time
-(with only a one-second timestamp-representation tolerance), validates exactly
+one observed start and stop to the private controlled PID plus exact canonical
+100-ns creation time, validates exactly
 one EventTrace `Header` identity (provider GUID
 `68fdd900-4a3e-11d1-84f4-0000f80464e3`, EventID `0`, documented Header opcode
 and version) rather than the EventID-zero `PartitionInfoExtension`, then validates
 `MaxFileSize`, `LogFileMode`, `BuffersWritten`, `EventsLost`, and `BuffersLost`,
 normalizes only tracerpt XML nine-digit fractions whose final two digits are
 both zero to the existing seven-digit canonical form, rejects other extra
-precision, reconciles summary counters, and emits
+precision, and in diagnostic mode reports observed process counts separately
+from reconciled identity counts plus explicit unmatched-stop and
+unmatched-controlled counts. An unmatched noncontrolled stop with no parent
+may be represented only in that diagnostic mode; production parsing remains
+fail-closed. It reconciles summary counters and emits
 only sanitized booleans/counts and artifact hashes with
 `qualification_prohibited=true`. The raw controlled-process identity remains
 private.
