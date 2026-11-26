@@ -1179,6 +1179,74 @@ def main() -> int:
         assert tracerpt_metadata["eventtrace_header"]["buffers_written"] == 6
         names.append("tracerpt_kernel_process_start_stop_shape")
 
+        nine_digit_xml = directory / "tracerpt-nine-digit-zero-fraction.xml"
+        nine_digit_xml.write_text(
+            tracerpt_xml.read_text(encoding="utf-8")
+            .replace("2026-11-22T00:00:01.1234567Z", "2026-11-22T00:00:01.123456700Z")
+            .replace("2026-11-22T00:00:02.1234567Z", "2026-11-22T00:00:02.123456700Z")
+            .replace("2026-11-22T00:00:00.0000000Z", "2026-11-22T00:00:00.000000000Z"),
+            encoding="utf-8")
+        nine_digit_events, _ = EVALUATOR.ETL_PARSER._parse_xml(
+            nine_digit_xml,
+            "Total Buffers Processed 6\nTotal Events Processed 11\nTotal Events  Lost      0\n")
+        assert nine_digit_events[0]["timestamp_utc"] == "2026-11-22T00:00:01.1234567Z"
+        assert nine_digit_events[0]["start_time_utc"] == "2026-11-22T00:00:00.0000000Z"
+        assert nine_digit_events[1]["timestamp_utc"] == "2026-11-22T00:00:02.1234567Z"
+        assert nine_digit_events[1]["start_time_utc"] == "2026-11-22T00:00:00.0000000Z"
+        nine_digit_receipt = directory / "seven-digit-controlled-process.json"
+        nine_digit_receipt.write_text(json.dumps({
+            "format": "VOX_FX_T18_CONTROLLED_PROCESS_RECEIPT_V1",
+            "pid": 240148,
+            "creation_time_utc": "2026-11-22T00:00:00.0000000Z",
+            "exit_code": 0,
+        }), encoding="utf-8")
+        nine_digit_binding = EVALUATOR.ETL_PARSER._controlled_process_binding(
+            nine_digit_events, nine_digit_receipt)
+        assert nine_digit_binding["controlled_start_match_count"] == 1
+        assert nine_digit_binding["controlled_stop_match_count"] == 1
+        assert nine_digit_binding["controlled_process_binding_valid"] is True
+        nonzero_exit_xml = directory / "tracerpt-nine-digit-nonzero-exit-fraction.xml"
+        nonzero_exit_xml.write_text(
+            nine_digit_xml.read_text(encoding="utf-8").replace(
+                'Name="ExitTime">2026-11-22T00:00:02.123456700Z',
+                'Name="ExitTime">2026-11-22T00:00:02.123456701Z', 1),
+            encoding="utf-8")
+        try:
+            EVALUATOR.ETL_PARSER._parse_xml(
+                nonzero_exit_xml,
+                "Total Buffers Processed 6\nTotal Events Processed 11\nTotal Events  Lost      0\n")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("nonzero ExitTime sub-100ns digits were accepted")
+
+        assert EVALUATOR.ETL_PARSER._tracerpt_xml_timestamp_text(
+            "2026-11-22T00:00:00.1234567Z", "seven-digit timestamp") == "2026-11-22T00:00:00.1234567Z"
+        assert EVALUATOR.ETL_PARSER._tracerpt_xml_timestamp_text(
+            "2026-11-22T00:00:00.123456700+03:29", "offset timestamp") == "2026-11-21T20:31:00.1234567Z"
+        assert EVALUATOR.ETL_PARSER._tracerpt_xml_timestamp_text(
+            "2026-11-22T00:00:00.123456800Z", "100ns-distinct timestamp") == "2026-11-22T00:00:00.1234568Z"
+        for invalid_timestamp in (
+                "2026-11-22T00:00:00.123456701Z",
+                "2026-11-22T00:00:00.123456710Z",
+                "2026-11-22T00:00:00.12345670Z",
+                "2026-11-22T00:00:00.1234567000Z"):
+            try:
+                EVALUATOR.ETL_PARSER._tracerpt_xml_timestamp_text(invalid_timestamp, "invalid timestamp")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"unsupported tracerpt timestamp precision passed: {invalid_timestamp}")
+        for strict_parser in (EVALUATOR.ETL_PARSER.utc_text, EVALUATOR.ETL_PARSER.utc_ticks):
+            try:
+                strict_parser("2026-11-22T00:00:00.123456700Z")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("strict canonical timestamp parser accepted nine fractional digits")
+        names.append("tracerpt_nine_digit_zero_fraction_normalized")
+        names.append("tracerpt_timestamp_precision_fail_closed")
+
         classic_tracerpt_xml = directory / "tracerpt-classic-eventtrace-shape.xml"
         classic_tracerpt_xml.write_text(
             """<Events xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\">

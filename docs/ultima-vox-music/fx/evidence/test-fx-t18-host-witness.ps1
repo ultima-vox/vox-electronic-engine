@@ -27,6 +27,8 @@ if ($parserSource -notmatch 'EVENT_TRACE_PROVIDER_GUID' -or
     $parserSource -notmatch 'MSNT_SYSTEM_TRACE_PROVIDER_GUID' -or
     $parserSource -notmatch '_process_event_identity' -or
     $parserSource -notmatch 'unique direct System block' -or
+    $parserSource -notmatch '_tracerpt_xml_timestamp_text' -or
+    $parserSource -notmatch 'nonzero sub-100ns timestamp digits' -or
     $parserSource -notmatch 'PartitionInfoExtension' -or
     $parserSource -notmatch 'validated EventTrace_Header' -or
     $parserSource -notmatch 'summary_buffers_processed' -or

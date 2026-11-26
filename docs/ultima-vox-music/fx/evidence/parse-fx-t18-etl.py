@@ -47,7 +47,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 
 FORMAT = "VOX_FX_T18_ETW_PARSE_RECEIPT_V1"
-PARSER_VERSION = "1.8.0"
+PARSER_VERSION = "1.9.0"
 PROVIDER = "Microsoft-Windows-Kernel-Process/ETW"
 PROVIDER_GUID = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716"
 EVENT_TRACE_PROVIDER_GUID = "68fdd900-4a3e-11d1-84f4-0000f80464e3"
@@ -156,6 +156,24 @@ def _timestamp_text(value: Any, name: str) -> str:
             return _filetime_text(text, name)
         except ValueError:
             raise iso_error
+
+
+def _tracerpt_xml_timestamp_text(value: Any, name: str) -> str:
+    """Normalize only observed tracerpt nine-digit ISO fractions.
+
+    Windows tracerpt XML can emit nanosecond-looking fractions whose eighth
+    and ninth digits are zero even though ETW timestamps are 100-ns ticks.
+    Normalize that exact lossless case to seven digits, then run the existing
+    strict ISO/FILETIME parser. All other precision remains fail-closed.
+    """
+    text = value if isinstance(value, str) else ""
+    match = re.fullmatch(r"(?P<prefix>.+\.)(?P<fraction>[0-9]+)(?P<suffix>Z|[+-][0-9]{2}:?[0-9]{2})", text)
+    if match and len(match.group("fraction")) == 9:
+        fraction = match.group("fraction")
+        if fraction[7:] != "00":
+            raise ValueError(f"{name} has nonzero sub-100ns timestamp digits")
+        text = match.group("prefix") + fraction[:7] + match.group("suffix")
+    return _timestamp_text(text, name)
 
 
 def utc_ticks(value: Any) -> int:
@@ -444,11 +462,11 @@ def _event_time(event: ET.Element) -> str:
     for node in event.iter():
         tag = node.tag.rsplit("}", 1)[-1].casefold()
         if tag == "timecreated" and node.attrib.get("SystemTime"):
-            return _timestamp_text(node.attrib["SystemTime"], "tracerpt event timestamp")
+            return _tracerpt_xml_timestamp_text(node.attrib["SystemTime"], "tracerpt event timestamp")
     value = _data_value(event, {"Timestamp", "TimeCreated", "EventTime"})
     if value is None:
         raise ValueError("tracerpt event has no provider timestamp")
-    return _timestamp_text(value, "tracerpt event timestamp")
+    return _tracerpt_xml_timestamp_text(value, "tracerpt event timestamp")
 
 
 def _parse_int(value: str | None, name: str) -> int:
@@ -976,7 +994,11 @@ def _parse_xml(decoded: Path, summary: str) -> tuple[list[dict[str, Any]], dict[
         start_time = _data_value(event, {"CreateTime", "CreationTime", "ProcessCreateTime"})
         if not start_time:
             raise ValueError("tracerpt process event lacks CreateTime")
-        start_time_utc = _timestamp_text(start_time, "tracerpt process creation time")
+        start_time_utc = _tracerpt_xml_timestamp_text(start_time, "tracerpt process creation time")
+        if kind == "stop":
+            exit_time = _data_value(event, {"ExitTime"})
+            if exit_time is not None:
+                _tracerpt_xml_timestamp_text(exit_time, "tracerpt process exit time")
         prior = starts.get((pid, start_time_utc))
         if kind == "start":
             if not process_name or not parent_value:

@@ -759,7 +759,9 @@ one EventTrace `Header` identity (provider GUID
 `68fdd900-4a3e-11d1-84f4-0000f80464e3`, EventID `0`, documented Header opcode
 and version) rather than the EventID-zero `PartitionInfoExtension`, then validates
 `MaxFileSize`, `LogFileMode`, `BuffersWritten`, `EventsLost`, and `BuffersLost`,
-reconciles summary counters, and emits
+normalizes only tracerpt XML nine-digit fractions whose final two digits are
+both zero to the existing seven-digit canonical form, rejects other extra
+precision, reconciles summary counters, and emits
 only sanitized booleans/counts and artifact hashes with
 `qualification_prohibited=true`. The raw controlled-process identity remains
 private.
