@@ -18,7 +18,11 @@ namespace vox::fx {
 // the layer settings at note-on; no pointer into UI or host state is retained.
 enum class NoiseFamily : std::uint8_t { riser, downlifter, shepard, impact, whoosh, laser, squelch, metallic, texture, formant, glitch, granular };
 enum class PlayMode : std::uint8_t { oneShot, gate, continuous, loop, sequence, transition };
-enum class TriggerSource : std::uint8_t { midi, pattern, preview };
+// Voice ownership domains. midi = host MIDI (any of the 16 channels, own
+// ticket FIFOs per channel/note); pattern = host-synced pattern notes;
+// preview = finite audition; ui = editor performance keyboard (channel 0,
+// own per-note ticket FIFO — never shares a ticket with host MIDI).
+enum class TriggerSource : std::uint8_t { midi, pattern, preview, ui };
 enum class TriggerPolicy : std::uint8_t { overlap, ignore, replace };
 struct NoiseLayer {
     NoiseFamily family = NoiseFamily::riser;
@@ -115,7 +119,7 @@ public:
         rate_ = std::isfinite(sampleRate) && sampleRate >= 8000.0 && sampleRate <= 384000.0 ? sampleRate : 44100.0;
         (void)voiceMotion_.prepare(rate_);
         (void)setTempo(120.0); tempo_ = 120.0; musicalClockAvailable_ = false;
-        barGrid_ = {}; blockOffset_ = 0; midiKeys_ = {};
+        barGrid_ = {}; blockOffset_ = 0; midiKeys_ = {}; uiKeys_ = {};
         for (std::size_t i = 0; i < coefficients_.size(); ++i) {
             const double phase = static_cast<double>(i) / tableIntervals;
             const double cutoff = std::min(180.0 * std::exp(phase * std::log(10000.0 / 180.0)), rate_ * 0.45);
@@ -183,11 +187,16 @@ public:
                 TriggerSource source = TriggerSource::midi) noexcept {
         timeline::SecondsClock clock;
         timeline::BarsClock barsClock;
-        if (channel < 1 || channel > 16 || note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f) return false;
+        const bool uiSource = source == TriggerSource::ui;
+        // UI voices live on their own channel-0 domain; host MIDI keeps all
+        // sixteen channels. No MIDI channel is reserved for the editor.
+        if (uiSource ? channel != 0 : (channel < 1 || channel > 16)) return false;
+        if (note < 0 || note > 127 || !std::isfinite(velocity) || velocity <= 0.0f) return false;
         // Every valid MIDI key-down occupies a FIFO position, even if its
         // audio voice is later stolen, replaced, finite, or never started.
         // Otherwise that key-up would release a newer overlapping voice.
-        const auto ticket = source == TriggerSource::midi ? ++midiKey(channel, note).issued : 0;
+        const auto ticket = source == TriggerSource::midi ? ++midiKey(channel, note).issued
+            : source == TriggerSource::ui ? ++uiKey(note).issued : 0;
         if (!clock.start(duration, rate_)) return false;
         if (program_.bars != 0 && (!musicalClockAvailable_ || !barsClock.start(program_.bars,4,4,rate_))) return false;
         const bool aligned = program_.mode == PlayMode::transition && program_.bars != 0;
@@ -254,8 +263,11 @@ public:
         slot->target = target; slot->targetSpan = target - start;
         if (aligned) slot->duration = slot->targetSpan * 60.0 / tempo_;
         // Pattern/preview send no NoteOff. They audition one bounded pass,
-        // without stealing MIDI ownership for the same channel/note.
-        if (source != TriggerSource::midi && isHeldMode(slot->program.mode))
+        // without stealing MIDI ownership for the same channel/note. The UI
+        // keyboard DOES pair NoteOff on its own ticket domain and keeps the
+        // program's held-mode semantics (Gate releases, Continuous sustains).
+        if ((source == TriggerSource::pattern || source == TriggerSource::preview) &&
+            isHeldMode(slot->program.mode))
             slot->program.mode = PlayMode::oneShot;
         slot->serial = ++serial_;slot->publication=programPublication_;
         if(voiceMotion_.active()){
@@ -294,13 +306,15 @@ public:
         return count;
     }
     std::uint32_t droppedEventCount() const noexcept { return droppedEvents_; }
-    // Audio-thread only: bit mask of active notes on every channel except
-    // excludeChannel. The editor reads the published snapshot (not this
-    // array) so host-held keys and UI-keyboard keys stay separately owned.
-    std::array<std::uint64_t,2> activeNoteMask(int excludeChannel) const noexcept {
+    // Audio-thread only: bit mask of HOST-held notes — voices whose source
+    // is TriggerSource::midi, on any of the sixteen host channels (channel
+    // 16 included). Pattern, audition and editor-keyboard voices are not
+    // host notes and are excluded. The editor reads the published snapshot,
+    // never this array.
+    std::array<std::uint64_t,2> hostNoteMask() const noexcept {
         std::array<std::uint64_t,2> mask{0,0};
         for(const auto& voice:voices_)
-            if(voice.active&&voice.channel!=excludeChannel&&voice.note>=0&&voice.note<128)
+            if(voice.active&&voice.source==TriggerSource::midi&&voice.note>=0&&voice.note<128)
                 mask[static_cast<std::size_t>(voice.note)>>6]|=std::uint64_t{1}<<(voice.note&63);
         return mask;
     }
@@ -310,8 +324,21 @@ public:
     // Consume exactly one MIDI key-down on this channel/note. A finite or
     // already retired owner still consumes its own key-up. No event IDs are
     // assumed to exist in MIDI 1.0; identical keys are paired in wire order.
-    void noteOff(int channel, int note) noexcept {
-        if(channel<1||channel>16||note<0||note>127)return;
+    void noteOff(int channel, int note, TriggerSource source = TriggerSource::midi) noexcept {
+        if(note<0||note>127)return;
+        if(source==TriggerSource::ui){
+            // Independent UI ticket domain: a host key-up can never release
+            // an editor note and vice versa, even on the same pitch.
+            if(channel!=0)return;
+            auto& key=uiKey(note);
+            if(key.released==key.issued)return;
+            const auto ticket=++key.released;
+            for(auto& v:voices_)
+                if(v.active&&v.channel==0&&v.note==note&&v.source==TriggerSource::ui&&
+                   v.noteTicket==ticket&&v.releaseRemaining==0&&isHeldMode(v.program.mode)){beginRelease(v,true);break;}
+            return;
+        }
+        if(channel<1||channel>16)return;
         auto& key = midiKey(channel, note);
         if (key.released == key.issued) return;
         const auto ticket = ++key.released;
@@ -325,12 +352,20 @@ public:
     }
     // Offline processing discards live audition voices before any host notes
     // can reuse their slots. The sample store releases a reader token only.
-    void discardPreview() noexcept {
+    void discardPreview() noexcept { discardSource(TriggerSource::preview); }
+    // Offline bounces must not leak live editor notes either.
+    void discardUiNotes() noexcept { discardSource(TriggerSource::ui); }
+    // Editor cancel/panic: graceful release of every UI-owned voice only.
+    void releaseUiNotes() noexcept {
+        for(auto& v:voices_)if(v.active&&v.source==TriggerSource::ui)beginRelease(v);
+        for(auto& v:retiring_)if(v.active&&v.source==TriggerSource::ui)beginRelease(v);
+    }
+    void discardSource(TriggerSource wanted) noexcept {
         bool discarded=false;
         const auto drop=[&](auto& bank,std::size_t offset){
             for(std::size_t i=0;i<bank.size();++i){
                 auto& v=bank[i];
-                if(!v.active||v.source!=TriggerSource::preview)continue;
+                if(!v.active||v.source!=wanted)continue;
                 v.active=false;discarded=true;
                 if(sampleLeases_[offset+i].data())sampleStore_->release(sampleLeases_[offset+i]);
             }
@@ -344,7 +379,7 @@ public:
     }
     void allSoundOff(int channel) noexcept {
         if (channel < 0 || channel > 16) return;
-        if (channel == 0) midiKeys_ = {};
+        if (channel == 0) { midiKeys_ = {}; uiKeys_ = {}; }
         else midiKeys_[static_cast<std::size_t>(channel - 1)] = {};
         for (auto& v : voices_) if (v.active && (channel == 0 || v.channel == channel)) beginRelease(v);
         for(auto& v:retiring_)if(v.active&&(channel==0||v.channel==channel))beginRelease(v);
@@ -412,6 +447,7 @@ private:
     MidiKey& midiKey(int channel, int note) noexcept {
         return midiKeys_[static_cast<std::size_t>(channel - 1)][static_cast<std::size_t>(note)];
     }
+    MidiKey& uiKey(int note) noexcept { return uiKeys_[static_cast<std::size_t>(note)]; }
     static bool isHeldMode(PlayMode mode) noexcept {
         return mode == PlayMode::gate || mode == PlayMode::continuous || mode == PlayMode::loop;
     }
@@ -988,6 +1024,7 @@ private:
     macro::Runtime voiceMotion_;
     std::array<float,8> macroBases_{.5f,.5f,.5f,.5f,.5f,.5f,.5f,.5f};
     std::array<std::array<MidiKey,128>,16> midiKeys_ {};
+    std::array<MidiKey,128> uiKeys_ {};
     double tempo_ = 120.0, motionTempo_ = 120.0;
     bool musicalClockAvailable_ = false;
     timeline::BarGrid barGrid_;

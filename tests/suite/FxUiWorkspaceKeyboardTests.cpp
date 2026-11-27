@@ -156,63 +156,170 @@ void checkKeyboardInteraction()
     keyboard.mouseUp (mouseEvent (keyboard, firstWhite, 100.f, false, true));
 }
 
-// Bounded SPSC queue: the audio thread consumes UI notes, never echoes them
-// into the host MidiBuffer, and overflow is counted instead of growing.
+// Bounded SPSC queue + source ownership (TL P0 7227421044): the audio
+// thread consumes UI notes on the engine's independent domain, never echoes
+// them into the host MidiBuffer, overflow cannot strand a release, and
+// panic/restore/offline/editor-cancel clear pending and active UI state.
 void checkProcessorUiQueue()
 {
     using namespace vox::fx;
     FxProcessor processor;
     processor.prepareToPlay (48000, 512);
-    // Gate mode: NoteOff releases (One Shot would ignore it by policy).
     check (processor.setPlayback (PlayMode::gate, TriggerPolicy::overlap),
            "gate mode so UI note-off releases");
     juce::AudioBuffer<float> audio (2, 512);
     juce::MidiBuffer midi;
+    const auto run = [&] (int blocks) {
+        for (int i = 0; i < blocks; ++i) { processor.processBlock (audio, midi); midi.clear(); }
+    };
 
     check (processor.pushUiNote ({1, 60, 100}), "UI note enqueues");
     processor.processBlock (audio, midi);
+    check (midi.getNumEvents() == 0, "UI notes never echo into the host MidiBuffer");
     midi.clear();
     check (processor.audioTelemetry().events >= 1, "audio thread consumed the UI note");
 
-    // No synthetic host MIDI echo: the block's MidiBuffer is only cleared,
-    // never written (this instrument has no MIDI output by contract).
     check (processor.pushUiNote ({0, 60, 0}), "UI note-off enqueues");
-    for (int i = 0; i < 40 && processor.audioTelemetry().events != 0; ++i) {
-        processor.processBlock (audio, midi);
-        midi.clear();
-    }
+    run (40);
     check (processor.audioTelemetry().events == 0, "UI note-off retires the voice");
 
+    // Overflow: note-ons fail closed and are counted; a note-off at capacity
+    // is accepted through the release latch and must still reach its voice.
     int accepted = 0;
-    while (processor.pushUiNote ({1, static_cast<std::uint8_t> (61 + (accepted % 40)), 100}))
+    while (processor.pushUiNote ({1, static_cast<std::uint8_t> (100 + (accepted % 20)), 100}))
         if (++accepted > 512) break;
-    check (accepted <= 64 && processor.uiNoteDropped() >= 1,
-           "UI note queue overflow is bounded and counted");
-    // Drain the backlog so the bounded path stays deterministic.
-    for (int i = 0; i < 8; ++i) {
-        processor.processBlock (audio, midi);
-        midi.clear();
-    }
+    check (accepted == 64 && processor.uiNoteDropped() >= 1,
+           "note-on queue saturates at 64 with counted fail-closed drops");
+    const auto pressedNote = static_cast<std::uint8_t> (100 + ((accepted - 1) % 20));
+    check (processor.pushUiNote ({0, pressedNote, 0}),
+           "note-off is accepted via the release latch while the ring is full");
+    // Drain, then release every stacked ticket so nothing can be stranded.
+    run (4);
+    for (int note = 100; note < 120; ++note)
+        check (processor.pushUiNote ({0, static_cast<std::uint8_t> (note), 0}),
+               "post-drain note-off accepted");
+    run (40);
+    check (processor.audioTelemetry().events == 0,
+           "saturated queue cannot strand gate notes");
+    (void) pressedNote;
+}
 
-    // Host-note indication snapshot: host keys appear, UI keys (channel 16)
-    // stay in the keyboard's own held bookkeeping.
-    FxProcessor host;
-    host.prepareToPlay (48000, 512);
-    check (host.setPlayback (PlayMode::gate, TriggerPolicy::overlap), "gate mode for note-off release");
-    midi.addEvent (juce::MidiMessage::noteOn (1, 72, 0.8f), 0);
-    host.processBlock (audio, midi);
-    midi.clear();
-    const auto note72 = [] (const FxProcessor& p) {
-        return (p.hostNoteMask()[1] >> (72 - 64)) & 1u; // note 72 is in mask[1]
+// Source ownership matrix: UI voices share no ticket domain with any host
+// channel (16 included), host CC all-off spares them, global panic and
+// restore clear them, offline bounces discard them, and the indication mask
+// reflects actual host sources only.
+void checkMidiOwnership()
+{
+    using namespace vox::fx;
+    FxProcessor processor;
+    processor.prepareToPlay (48000, 512);
+    check (processor.setPlayback (PlayMode::gate, TriggerPolicy::overlap), "gate mode");
+    juce::AudioBuffer<float> audio (2, 512);
+    juce::MidiBuffer midi;
+    const auto run = [&] (int blocks) {
+        for (int i = 0; i < blocks; ++i) { processor.processBlock (audio, midi); midi.clear(); }
     };
-    check (note72 (host), "host note appears in the indication mask");
-    midi.addEvent (juce::MidiMessage::noteOff (1, 72), 0);
-    for (int i = 0; i < 20; ++i) {
-        host.processBlock (audio, midi);
-        midi.clear();
-        if (note72 (host) == 0) break;
+    const auto events = [&] { return processor.audioTelemetry().events; };
+
+    // Same pitch: UI + host channel 1 + host channel 16 at once.
+    check (processor.pushUiNote ({1, 60, 100}), "UI press for the shared pitch");
+    midi.addEvent (juce::MidiMessage::noteOn (1, 60, 0.5f), 0);
+    midi.addEvent (juce::MidiMessage::noteOn (16, 60, 0.5f), 0);
+    processor.processBlock (audio, midi);
+    check (midi.getNumEvents() == 0, "host MIDI input produces no MIDI output");
+    midi.clear();
+    check (events() == 3, "UI + host ch1 + host ch16 same pitch sound together");
+
+    check (processor.pushUiNote ({0, 60, 0}), "UI release");
+    run (4);
+    check (events() == 2, "UI note-off releases only the editor voice");
+
+    midi.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+    processor.processBlock (audio, midi);
+    midi.clear();
+    check (events() == 1, "host ch1 note-off leaves the ch16 voice");
+
+    // Host CC123 on channel 1 must not kill the UI voice.
+    check (processor.pushUiNote ({1, 61, 100}), "UI press before host CC");
+    run (1);
+    check (events() == 2, "UI voice sounds beside the host ch16 voice");
+    midi.addEvent (juce::MidiMessage::controllerEvent (1, 123, 0), 0);
+    processor.processBlock (audio, midi);
+    midi.clear();
+    check (events() == 2, "host CC123 on ch1 does not kill the UI voice");
+    midi.addEvent (juce::MidiMessage::controllerEvent (16, 123, 0), 0);
+    processor.processBlock (audio, midi);
+    midi.clear();
+    check (events() == 1, "host CC123 on ch16 releases only its own channel");
+
+    // Global panic releases everything.
+    processor.panic();
+    run (4);
+    check (events() == 0, "global panic releases UI and host voices");
+
+    // Indication mask: host ch16 counts as host; UI and audition do not.
+    FxProcessor maskHost;
+    maskHost.prepareToPlay (48000, 512);
+    check (maskHost.setPlayback (PlayMode::gate, TriggerPolicy::overlap), "gate mode for mask");
+    juce::MidiBuffer in;
+    in.addEvent (juce::MidiMessage::noteOn (16, 72, 0.8f), 0);
+    maskHost.processBlock (audio, in);
+    in.clear();
+    check (((maskHost.hostNoteMask()[1] >> (72 - 64)) & 1u) != 0,
+           "host note on channel 16 appears in the host indication mask");
+    check (maskHost.pushUiNote ({1, 48, 100}), "UI note for mask exclusion");
+    maskHost.processBlock (audio, in);
+    in.clear();
+    check (((maskHost.hostNoteMask()[0] >> 48) & 1u) == 0,
+           "UI keyboard voice never appears in the host mask");
+    maskHost.audition();
+    maskHost.processBlock (audio, in);
+    in.clear();
+    check (((maskHost.hostNoteMask()[0] >> 60) & 1u) == 0,
+           "audition (preview) voice never appears in the host mask");
+    maskHost.panic();
+    runBlocks: ;
+    for (int i = 0; i < 8; ++i) { maskHost.processBlock (audio, in); in.clear(); }
+
+    // Restore boundary: active and pending UI notes clear; no resurrection.
+    check (processor.pushUiNote ({1, 62, 100}), "UI note before restore");
+    run (1);
+    check (events() >= 1, "UI voice active before restore");
+    check (processor.pushUiNote ({1, 63, 100}), "pending UI note before restore");
+    juce::MemoryBlock state;
+    processor.getStateInformation (state);
+    processor.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+    run (4);
+    check (events() == 0, "restore clears active and pending UI notes");
+
+    // Offline transition with an active UI voice: discarded, not leaked.
+    check (processor.pushUiNote ({1, 64, 100}), "UI note before offline");
+    run (1);
+    check (events() >= 1, "UI voice active before offline bounce");
+    processor.setNonRealtime (true);
+    run (2);
+    check (events() == 0, "offline bounce discards active UI voices");
+    check (processor.pushUiNote ({1, 65, 100}), "UI press during offline");
+    processor.setNonRealtime (false);
+    run (2);
+    check (events() == 0, "offline queue flush prevents resurrection after the bounce");
+
+    // Editor cancel with pending events (close/focus-loss recovery hook).
+    check (processor.pushUiNote ({1, 66, 100}), "UI press before cancel");
+    processor.cancelUiNotes();
+    run (2);
+    check (events() == 0, "cancelUiNotes flushes pending events and releases voices");
+
+    // Repeated offline transitions with a held UI note.
+    check (processor.pushUiNote ({1, 67, 100}), "UI press for transitions");
+    run (1);
+    for (int i = 0; i < 3; ++i) {
+        processor.setNonRealtime (true);
+        run (1);
+        processor.setNonRealtime (false);
+        run (1);
     }
-    check (note72 (host) == 0, "host note-off clears the indication mask");
+    check (events() == 0, "repeated offline transitions leave no UI voice");
 }
 } // namespace
 
@@ -221,6 +328,7 @@ int main()
     checkWorkspaceMatrix();
     checkKeyboardInteraction();
     checkProcessorUiQueue();
+    checkMidiOwnership();
     if (failures != 0) {
         std::printf ("FX UI workspace/keyboard: %d failure(s)\n", failures);
         return 1;

@@ -444,6 +444,12 @@ void FxProcessor::prepareToPlay (double rate, int blockSize)
     (void) effects_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     (void) macroRuntime_.prepare (std::isfinite(rate) && rate >= 8000 && rate <= 384000 ? rate : 44100);
     programSequence_ = 0;publishPlayhead(false);audioEffects_ = effects::defaults();
+    flushUiNoteQueue();
+    uiReleaseLatchLow_.store(0,std::memory_order_relaxed);
+    uiReleaseLatchHigh_.store(0,std::memory_order_relaxed);
+    uiCancelPending_.store(false,std::memory_order_relaxed);
+    hostNoteMaskLow_.store(0,std::memory_order_relaxed);
+    hostNoteMaskHigh_.store(0,std::memory_order_relaxed);
     audioBases_=readCallbackBases();audioEpoch_=controllerEpoch_.load(std::memory_order_acquire);
     retiredEpoch_=retireAtEpoch_.load(std::memory_order_acquire);
     outputSmoothing_.reset (std::isfinite (rate) && rate >= 8000.0 && rate <= 384000.0 ? rate : 44100.0, 0.005);
@@ -465,6 +471,15 @@ void FxProcessor::releaseResources() {
     peaks_.store(0,std::memory_order_relaxed);clipLatched_.store(false,std::memory_order_relaxed);publishPlayhead(false);
 }
 void FxProcessor::reset() { panic(); }
+void FxProcessor::setNonRealtime (bool isNonRealtime) noexcept
+{
+    SuiteProcessor::setNonRealtime (isNonRealtime);
+    // Both edges invalidate queued events: anything pushed before the
+    // offline window and anything pushed during it must not play on the
+    // other side of the transition.
+    uiGeneration_.fetch_add (1, std::memory_order_acq_rel);
+    if (isNonRealtime) uiCancelPending_.store (true, std::memory_order_release);
+}
 juce::AudioProcessorEditor* FxProcessor::createEditor()
 {
     auto editor = std::make_unique<vox::suite::SuiteEditor> (*this);
@@ -580,6 +595,12 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     if(retire||panic){
         engine_.allSoundOff(0);previewBus_.stop();
         auditionRequest_.store(AuditionRequest::none,std::memory_order_relaxed);
+        // Global panic / restore boundary: pending editor events must not
+        // resurrect notes after this point.
+        flushUiNoteQueue();
+        uiReleaseLatchLow_.store(0,std::memory_order_release);
+        uiReleaseLatchHigh_.store(0,std::memory_order_release);
+        uiCancelPending_.store(false,std::memory_order_release);
     }
     barClock_.store(barClock,std::memory_order_relaxed);
     const float requestedDuration = audioBases_.duration;
@@ -593,7 +614,11 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const bool offlineBounce=isNonRealtime();
     if(offlineBounce){
         engine_.discardPreview();
+        engine_.discardUiNotes();
         previewBus_.discardOnAudioThread();
+        flushUiNoteQueue();
+        uiReleaseLatchLow_.store(0,std::memory_order_release);
+        uiReleaseLatchHigh_.store(0,std::memory_order_release);
     }else{
         if(audition==AuditionRequest::stop)engine_.stopPreview();
         if(audition==AuditionRequest::start)engine_.noteOn(1,60,.8f,eventDuration,selection!=0,selection,TriggerSource::preview);
@@ -604,25 +629,44 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     const bool patternHostReady=patternClock==PatternClock::ready44||patternClock==PatternClock::readyAssumed44;
     if(!wantsPattern)patternClock=PatternClock::inactive;
     else if(!admit&&patternHostReady)patternClock=PatternClock::waitingForState;
+    // Editor cancel (close/focus-loss/panic hook): flush first so queued
+    // note-ons cannot resurrect, then release every UI-owned voice only.
+    if(uiCancelPending_.exchange(false,std::memory_order_acquire)){
+        flushUiNoteQueue();
+        uiReleaseLatchLow_.store(0,std::memory_order_release);
+        uiReleaseLatchHigh_.store(0,std::memory_order_release);
+        engine_.releaseUiNotes();
+    }
+    // UI keyboard notes are consumed at block start (position 0), before
+    // host MIDI and pattern scheduling — including on empty blocks. Ring
+    // order is preserved; the overflow release latch is applied after the
+    // ring so a coalesced note-off always reaches its note-on. Releases are
+    // applied even when the graph is not admitted; note-ons are dropped
+    // (counted) while !admit or offline so stale events never burst later.
+    {
+        UiNoteEvent event;
+        const auto generation=uiGeneration_.load(std::memory_order_acquire);
+        while(uiNotePop(event)){
+            if(event.kind==0){ engine_.noteOff(0,event.note,TriggerSource::ui); continue; }
+            if(event.generation!=generation){
+                uiNoteDropped_.fetch_add(1,std::memory_order_relaxed);continue;}
+            if(admit&&!offlineBounce)
+                (void)engine_.noteOn(0,event.note,static_cast<float>(event.velocity)/127.0f,
+                                     eventDuration,selection!=0,selection,TriggerSource::ui);
+            else uiNoteDropped_.fetch_add(1,std::memory_order_relaxed);
+        }
+        const auto latchLo=uiReleaseLatchLow_.exchange(0,std::memory_order_acq_rel);
+        const auto latchHi=uiReleaseLatchHigh_.exchange(0,std::memory_order_acq_rel);
+        for(int note=0;note<64;++note)
+            if(latchLo&(std::uint64_t{1}<<note)) engine_.noteOff(0,note,TriggerSource::ui);
+        for(int note=64;note<128;++note)
+            if(latchHi&(std::uint64_t{1}<<(note-64))) engine_.noteOff(0,note,TriggerSource::ui);
+    }
     if (buffer.getNumChannels() < 2 || size == 0) {
         midi.clear(); // This instrument has no MIDI output, including empty blocks.
         patternClock_.store(patternClock,std::memory_order_relaxed);
         peaks_.store(0,std::memory_order_relaxed);publishTelemetry(engine_.activeEventCount(),false,false);publishPlayhead(false);
         return;
-    }
-    // UI keyboard notes are consumed at block start (position 0), before
-    // host MIDI and pattern scheduling. Offline bounces discard the live
-    // queue; when the graph is not admitted the events are dropped too so
-    // the bounded ring can never burst stale notes into a later block.
-    {
-        UiNoteEvent event;
-        if(!admit||offlineBounce){while(uiNotePop(event)){}}
-        else while(uiNotePop(event)){
-            if(event.kind!=0)
-                (void)engine_.noteOn(uiNoteChannel,event.note,static_cast<float>(event.velocity)/127.0f,
-                                     eventDuration,selection!=0,selection);
-            else engine_.noteOff(uiNoteChannel,event.note);
-        }
     }
     auto* left = buffer.getWritePointer (0);
     auto* right = buffer.getWritePointer (1);
@@ -691,7 +735,7 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     for(int i=0;i<size;++i){peakL=std::max(peakL,std::abs(left[i]));peakR=std::max(peakR,std::abs(right[i]));}
     peaks_.store(std::bit_cast<std::uint32_t>(peakL)|(std::uint64_t{std::bit_cast<std::uint32_t>(peakR)}<<32),std::memory_order_relaxed);
     const bool clip=peakL>=1.f||peakR>=1.f;
-    const auto hostMask=engine_.activeNoteMask(uiNoteChannel);
+    const auto hostMask=engine_.hostNoteMask();
     hostNoteMaskLow_.store(hostMask[0],std::memory_order_relaxed);
     hostNoteMaskHigh_.store(hostMask[1],std::memory_order_relaxed);
     publishTelemetry(activeEvents,clip,fxTailOnly);publishPlayhead(!offlineBounce);

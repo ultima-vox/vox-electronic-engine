@@ -1058,7 +1058,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     stopAudition_.onClick=[this]{processor_.stopAudition();};
     panic_.setTooltip ("Fade all active events");
     audition_.onClick = [this] { processor_.audition(); };
-    panic_.onClick = [this] { processor_.panic(); };
+    panic_.onClick = [this] { keyboard_.releaseAllNotes(); processor_.panic(); };
     seed_.setRange (1, 2147483647, 1);
     seed_.setValue (processor_.generatorState().seed, juce::dontSendNotification);
     seed_.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -1240,10 +1240,13 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     // UI keyboard -> bounded processor queue (channel uiNoteChannel); the
     // audio thread consumes it and never echoes it into the host MIDI path.
     keyboard_.onNoteOn=[this](int note,float velocity){
-        processor_.pushUiNote({1,static_cast<std::uint8_t>(note),
-            static_cast<std::uint8_t>(juce::jlimit(1,127,int(std::lround(velocity*127.0f))))});};
+        const bool queued=processor_.pushUiNote({1,static_cast<std::uint8_t>(note),
+            static_cast<std::uint8_t>(juce::jlimit(1,127,int(std::lround(velocity*127.0f))))});
+        // Fail closed: a dropped press must not leave a held visual.
+        if(!queued)keyboard_.releaseAllNotes();};
     keyboard_.onNoteOff=[this](int note){
-        processor_.pushUiNote({0,static_cast<std::uint8_t>(note),0});};
+        (void)processor_.pushUiNote({0,static_cast<std::uint8_t>(note),0});};
+    keyboard_.onAllNotesOff=[this]{processor_.cancelUiNotes();};
     addAndMakeVisible(keyboard_);
     setWorkspace(Workspace::design);
     startTimerHz (25);
