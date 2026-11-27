@@ -226,11 +226,13 @@ private:
     }
     static double wavefold(double value,double gain) noexcept {
         constexpr double pi=3.14159265358979323846;
-        return (2.0/pi)*std::asin(std::sin(pi*value*gain*.5));
+        const auto scaled=std::clamp(value*gain,-8.0,8.0);
+        return (2.0/pi)*std::asin(std::sin(pi*scaled*.5));
     }
     // Antiderivative of the unit-periodized triangle fold in the gain-scaled
-    // domain. Its period integral is zero, so reducing to [0,4) preserves the
-    // exact first-order ADAA difference across fold turns without allocation.
+    // domain. The caller clamps to the legacy +/-8 input boundary. Its period
+    // integral is zero, so reducing to [0,4) preserves the exact first-order
+    // ADAA difference across fold turns without allocation.
     static double wavefoldIntegral(double value) noexcept {
         double phase=std::fmod(value,4.0);
         if(phase<0)phase+=4.0;
@@ -240,8 +242,11 @@ private:
     }
     static double wavefoldAdaa(double value,double& previous,double gain) noexcept {
         const double delta=value-previous;
+        const auto integral=[gain](double input){
+            return wavefoldIntegral(std::clamp(input*gain,-8.0,8.0));
+        };
         const double result=std::abs(delta)>1.0e-9
-            ?(wavefoldIntegral(gain*value)-wavefoldIntegral(gain*previous))/(gain*delta)
+            ?(integral(value)-integral(previous))/(gain*delta)
             :wavefold(value,gain);
         previous=value;
         return result;
