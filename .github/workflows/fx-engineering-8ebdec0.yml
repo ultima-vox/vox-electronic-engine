@@ -1,0 +1,280 @@
+name: FX Windows engineering 8ebdec0
+on:
+  push:
+    branches: [ci/fx-engineering-8ebdec0-20261127]
+    paths: ['.github/workflows/fx-engineering-8ebdec0.yml']
+permissions:
+  contents: read
+concurrency:
+  group: fx-engineering-8ebdec0
+  cancel-in-progress: false
+jobs:
+  windows-suite:
+    if: ${{ github.run_attempt == 1 }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 120
+    env:
+      # FX-only diagnostics; does not change job eligibility or other products.
+      FX_DIAGNOSTICS: 'ON'
+      FX_EXPECTED_SHA: '8ebdec0a9a3645d9cdf7907fe0b6216eb5b62f85'
+      CMAKE_GENERATOR: Visual Studio 17 2022
+      # Reviewed dependency pins. A tag can move; these commits cannot.
+      JUCE_REPOSITORY: https://github.com/juce-framework/JUCE.git
+      JUCE_COMMIT: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8   # JUCE 9.0.1
+      VST3SDK_REPOSITORY: https://github.com/steinbergmedia/vst3sdk.git
+      VST3SDK_TAG: v3.8.0_build_66                             # SDK bundled by JUCE 9.0.1
+      VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+    steps:
+      - name: Verify target host
+        shell: powershell
+        run: |
+          if ($env:COMPUTERNAME -ine 'HAMUNAPTRA' -or $env:RUNNER_ARCH -ne 'X64' -or $env:RUNNER_OS -ne 'Windows') { throw 'BLOCKED: wrong host or architecture' }
+          Write-Host "Verified HAMUNAPTRA / Windows x64 / runner $env:RUNNER_NAME"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The explicitly admitted FX engineering gate builds the reviewed
+          # source itself, not the mutable synthetic PR merge commit.
+          ref: 8ebdec0a9a3645d9cdf7907fe0b6216eb5b62f85
+          clean: true
+          persist-credentials: false
+
+      - name: Verify FX engineering source
+        if: ${{ env.FX_DIAGNOSTICS == 'ON' }}
+        shell: powershell
+        run: |
+          $actual = & git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:FX_EXPECTED_SHA) {
+            throw "Expected reviewed FX HEAD $env:FX_EXPECTED_SHA, found $actual"
+          }
+
+      - name: Windows PowerShell 5.1 fixture preflight
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probe = Join-Path $env:RUNNER_TEMP ('vox-fx-preflight-' + [Guid]::NewGuid().ToString('N'))
+          python -c "import yaml"
+          if ($LASTEXITCODE -ne 0) {
+            $deps = "$probe-deps"
+            python -m pip install --disable-pip-version-check --target $deps PyYAML==6.0.2
+            if ($LASTEXITCODE -ne 0) { throw 'Preflight Python dependency unavailable' }
+            $env:PYTHONPATH = $deps
+          }
+          python .github/scripts/prepare-fx-windows-preflight.py $probe
+          if ($LASTEXITCODE -ne 0) { throw 'Preflight extraction failed' }
+          powershell.exe -NoProfile -File .github/scripts/Test-FxWindowsPreflight.ps1 -PreparedDir $probe
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 preflight failed' }
+
+      - name: Record engineering environment
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path suite-out | Out-Null
+          $os = Get-CimInstance Win32_OperatingSystem
+          $cpu = Get-CimInstance Win32_Processor
+          $lines = @("Windows: $($os.Caption) build $($os.BuildNumber)", "CPU: $($cpu.Name -join ', ')", "Logical processors: $env:NUMBER_OF_PROCESSORS", "RAM KiB: $($os.TotalVisibleMemorySize)", "CPU load percent: $($cpu.LoadPercentage -join ', ')", "PowerShell: $($PSVersionTable.PSVersion)", "Workspace free bytes: $((Get-Item .).PSDrive.Free)")
+          $lines += @(cmake --version)
+          if ($LASTEXITCODE -ne 0) { throw 'CMake unavailable' }
+          $lines += @(ctest --version)
+          if ($LASTEXITCODE -ne 0) { throw 'CTest unavailable' }
+          $lines += @(powercfg /getactivescheme)
+          $lines | Set-Content suite-out/environment.txt -Encoding UTF8
+          Get-Content suite-out/environment.txt
+
+      # Infrastructure: FetchContent's JUCE clone broke off repeatedly on this
+      # runner. Use verified copies of the pinned commits from the runner tool
+      # cache (fetched with retries only when missing); CMake re-verifies JUCE.
+      - name: Provide verified JUCE and VST3 SDK copies
+        shell: powershell
+        run: |
+          $juce = & .github\scripts\Use-PinnedCheckout.ps1 -Name juce -Repository $env:JUCE_REPOSITORY -Ref 9.0.1 -Commit $env:JUCE_COMMIT
+          if (-not $juce) { exit 1 }
+          $sdk = & .github\scripts\Use-PinnedCheckout.ps1 -Name vst3sdk -Repository $env:VST3SDK_REPOSITORY -Ref $env:VST3SDK_TAG -Commit $env:VST3SDK_COMMIT -Submodules base,pluginterfaces,public.sdk,cmake
+          if (-not $sdk) { exit 1 }
+          "JUCE_DIR=$juce" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "VST3SDK_DIR=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Build the Steinberg VST3 validator (cached per SDK commit)
+        shell: powershell
+        run: |
+          $build = Join-Path $env:RUNNER_TOOL_CACHE "vox-pinned\vst3sdk-build-$($env:VST3SDK_COMMIT.Substring(0, 12))"
+          $validator = Join-Path $build 'bin\Release\validator.exe'
+          if (-not (Test-Path $validator)) {
+            cmake -S $env:VST3SDK_DIR -B $build -A x64 -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_RUN_VST_VALIDATOR=OFF
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cmake --build $build --config Release --target validator --parallel
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          "VST3_VALIDATOR=$validator" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Configure (suite only)
+        shell: powershell
+        run: |
+          cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON "-DFETCHCONTENT_SOURCE_DIR_JUCE=$env:JUCE_DIR" "-DVOX_FX_DIAGNOSTIC_SYMBOLS=$env:FX_DIAGNOSTICS"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build
+        id: suite-build
+        shell: powershell
+        run: |
+          cmake --build build-suite --config Release --clean-first --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Select-String -Path build-suite/CMakeCache.txt -Pattern 'CMAKE_GENERATOR:|CMAKE_GENERATOR_PLATFORM:|CMAKE_CXX_COMPILER:|CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION:' | ForEach-Object { $_.Line } | Add-Content suite-out/environment.txt
+          $compiler = @(Get-ChildItem build-suite/CMakeFiles -Recurse -Filter CMakeCXXCompiler.cmake -File)
+          foreach ($file in $compiler) {
+            Select-String -Path $file.FullName -Pattern '^set\(CMAKE_CXX_COMPILER_VERSION ' | ForEach-Object { $_.Line } | Add-Content suite-out/environment.txt
+          }
+
+      - name: Test (label suite)
+        id: suite-ctest
+        shell: powershell
+        run: |
+          foreach ($key in @('VOX_FX_STRESS_TYPICAL','VOX_FX_STRESS_AUTHORED','VOX_FX_TIMING_THREAD_CPU','VOX_FX_REPORT')) { Remove-Item -LiteralPath "Env:$key" -ErrorAction SilentlyContinue }
+          if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            # The FX gate retains fixture hashes but does not upload audio.
+            $golden = Join-Path $env:RUNNER_TEMP "vox-fx-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-golden"
+            $env:VOX_GOLDEN_OUT = (New-Item -ItemType Directory -Force -Path $golden).FullName
+            "VOX_GOLDEN_OUT=$env:VOX_GOLDEN_OUT" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            New-Item -ItemType Directory -Force -Path suite-out\ctest | Out-Null
+            $report = (Resolve-Path suite-out\ctest).Path
+            ctest --test-dir build-suite -C Release -L suite --show-only=json-v1 | Set-Content (Join-Path $report 'inventory.json') -Encoding UTF8
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            ctest --test-dir build-suite -C Release -L suite --no-tests=error --timeout 180 --output-on-failure --output-junit (Join-Path $report 'results.xml')
+            exit $LASTEXITCODE
+          }
+          New-Item -ItemType Directory -Force -Path suite-out\golden | Out-Null
+          $env:VOX_GOLDEN_OUT = (Resolve-Path suite-out\golden).Path
+          ctest --test-dir build-suite -C Release -L suite --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify complete CTest inventory without skips
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inventory = Get-Content suite-out/ctest/inventory.json -Raw | ConvertFrom-Json
+          [xml]$junit = Get-Content suite-out/ctest/results.xml -Raw
+          $expected = @($inventory.tests | ForEach-Object { $_.name } | Sort-Object)
+          $cases = @($junit.SelectNodes('//testcase'))
+          $actual = @($cases | ForEach-Object { $_.GetAttribute('name') } | Sort-Object)
+          if ($expected.Count -lt 1 -or $expected.Count -ne $actual.Count -or @(Compare-Object $expected $actual -CaseSensitive).Count -ne 0) { throw 'CTest inventory/results mismatch' }
+          $bad = @($cases | Where-Object { $_.SelectSingleNode('skipped') -or $_.SelectSingleNode('failure') -or $_.SelectSingleNode('error') -or $_.GetAttribute('status') -in @('notrun','disabled','skipped','fail','failed') })
+          if ($bad.Count -ne 0) { throw 'CTest skipped, failed, or unexecuted case' }
+          Write-Host "All $($actual.Count) inventoried suite tests executed without skipped/failure entries"
+
+      - name: Preserve FX CTest text logs
+        if: ${{ always() && !cancelled() && steps.suite-ctest.outcome != 'skipped' && env.FX_DIAGNOSTICS == 'ON' }}
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path suite-out\ctest | Out-Null
+          foreach ($file in 'LastTest.log','LastTestsFailed.log') {
+            $source = Join-Path 'build-suite\Testing\Temporary' $file
+            if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination suite-out\ctest }
+          }
+
+      - name: Replay historical FX crash cases only if they failed
+        if: ${{ failure() && steps.suite-ctest.outcome == 'failure' && env.FX_DIAGNOSTICS == 'ON' }}
+        timeout-minutes: 8
+        shell: powershell
+        run: |
+          $failed = 'suite-out\ctest\LastTestsFailed.log'
+          if (Test-Path $failed) {
+            foreach ($test in 'suite_fx_noise_riser_tests', 'suite_fx_processor_tests', 'suite_fx_layer_tests', 'suite_fx_shepard_tests') {
+              if (Select-String -Path $failed -Pattern "^\d+:$test$" -Quiet) {
+                try {
+                  & .github\scripts\Capture-FxProcessorException.ps1 -BuildDir build-suite -TestName $test -OutputDir (Join-Path 'suite-diagnostic' $test) -TimeoutSeconds 90
+                } catch { Write-Warning "Unable to replay ${test}: $_" }
+              }
+            }
+          }
+
+      - name: Upload FX crash diagnostics
+        if: ${{ failure() && steps.suite-ctest.outcome == 'failure' && env.FX_DIAGNOSTICS == 'ON' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOX-FX-Processor-Diagnostic
+          path: suite-diagnostic
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Steinberg VST3 validator
+        id: suite-validator
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path suite-out\validator | Out-Null
+          $failed = @()
+          $bundles = @(Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory)
+          if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            # FX inventory preflight begin
+            $required = @('VOX FX', 'VOX Drums', 'VOX Trance Synthesis')
+            $names = @($bundles | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.Name) })
+            $missing = @($required | Where-Object { -not ($names -ccontains $_) })
+            if ($bundles.Count -ne $required.Count -or $missing.Count -ne 0) {
+              throw "Expected the three standalone VST3 bundles; missing: $($missing -join ', '); found: $($names -join ', ')"
+            }
+            foreach ($bundle in $bundles) {
+              $binary = Join-Path $bundle.FullName (Join-Path 'Contents\x86_64-win' $bundle.Name)
+              if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Missing x64 VST3 binary: $binary" }
+            }
+            # FX inventory preflight end
+          }
+          foreach ($bundle in $bundles) {
+            $log = Join-Path 'suite-out\validator' "$([IO.Path]::GetFileNameWithoutExtension($bundle.Name)).txt"
+            & $env:VST3_VALIDATOR $bundle.FullName *> $log
+            $code = $LASTEXITCODE
+            Get-Content $log | Select-String -Pattern 'Result:|ERROR' | ForEach-Object { "$($bundle.Name): $_" }
+            if ($code -ne 0) { $failed += $bundle.Name }
+          }
+          if ($failed.Count -gt 0) { throw "VST3 validator failed: $($failed -join ', ')" }
+
+      - name: Record binaries and environment
+        if: ${{ always() && !cancelled() && steps.suite-build.outcome == 'success' }}
+        shell: powershell
+        env:
+          SUITE_CTEST_OUTCOME: ${{ steps.suite-ctest.outcome }}
+          SUITE_VALIDATOR_OUTCOME: ${{ steps.suite-validator.outcome }}
+        run: |
+          New-Item -ItemType Directory -Force -Path suite-out\VST3 | Out-Null
+          $lines = @(
+            "Commit: $(& git rev-parse HEAD)",
+            "Tree: $(& git rev-parse 'HEAD^{tree}')",
+            "Event SHA: $env:GITHUB_SHA",
+            "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
+            "Runner: $env:RUNNER_NAME",
+            "JUCE: $env:JUCE_COMMIT",
+            "VST3 SDK (validator): $env:VST3SDK_TAG $env:VST3SDK_COMMIT"
+          )
+          if ($env:FX_DIAGNOSTICS -eq 'ON') {
+            $lines += "CTest outcome: $env:SUITE_CTEST_OUTCOME"
+            $lines += "Steinberg validator outcome: $env:SUITE_VALIDATOR_OUTCOME"
+            if ($env:SUITE_VALIDATOR_OUTCOME -ne 'success') {
+              $lines += 'Not qualified by the validator; collected binaries are diagnostic only.'
+            }
+          }
+          foreach ($bundle in Get-ChildItem build-suite\products\*_artefacts\Release\VST3\*.vst3 -Directory -ErrorAction SilentlyContinue) {
+            Copy-Item -Recurse -Force $bundle.FullName suite-out\VST3\
+            foreach ($file in Get-ChildItem $bundle.FullName -Recurse -File) {
+              $relative = $file.FullName.Substring($bundle.Parent.FullName.Length + 1)
+              $lines += "SHA-256 $relative : $((Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLower())"
+            }
+          }
+          if ($env:FX_DIAGNOSTICS -eq 'ON' -and $env:VOX_GOLDEN_OUT -and (Test-Path -LiteralPath $env:VOX_GOLDEN_OUT)) {
+            $goldenLines = @(Get-ChildItem -LiteralPath $env:VOX_GOLDEN_OUT -Recurse -File | Sort-Object FullName | ForEach-Object {
+              $relative = $_.FullName.Substring($env:VOX_GOLDEN_OUT.Length + 1).Replace('\', '/')
+              "$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant())  $relative"
+            })
+            if ($goldenLines.Count -gt 0) { $goldenLines | Set-Content suite-out\golden-members.sha256 }
+            $lines += "Fixture golden files hashed (not uploaded): $($goldenLines.Count)"
+          }
+          $lines | Set-Content suite-out\manifest.txt
+          Get-Content suite-out\manifest.txt
+
+      - name: Upload suite bundles and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOX-Suite-VST3-8ebdec0
+          path: suite-out
+          if-no-files-found: error
+          retention-days: 14
+
