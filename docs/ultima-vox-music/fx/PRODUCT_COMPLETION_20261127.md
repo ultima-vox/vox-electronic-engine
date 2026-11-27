@@ -113,7 +113,7 @@ are retained:
   its code tree is byte-identical to `1625719`, the delta is documentation
   only): `100% tests passed, 0 failed, 0 skipped out of 78`, 130.62 s.
   Retained artifacts:
-  - raw console log: `evidence/ctest-suite-8ebdec0-20261127.log`
+  - raw console log: `evidence/ctest-suite-8ebdec0-20261127.txt`
   - JUnit XML: `evidence/ctest-suite-8ebdec0-20261127.xml`
   - build/dependency/tree provenance:
     `evidence/ctest-suite-8ebdec0-20261127.provenance.txt`
