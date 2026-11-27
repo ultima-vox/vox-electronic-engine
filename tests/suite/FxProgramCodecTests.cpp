@@ -166,6 +166,76 @@ int main() {
         invalid[invalid.size()-programcodec::familyControlBytes+3]=std::byte{0x7f};
         check(!programcodec::decode(invalid,restored),"FPRG10 rejects nonfinite family controls transactionally");
         auto truncated=v10;truncated.pop_back();check(!programcodec::decode(truncated,restored),"FPRG10 rejects truncation");
+        auto trailing=v10;trailing.push_back(std::byte{0});
+        check(!programcodec::decode(trailing,restored),"FPRG10 rejects trailing data");
+        auto future=v10;future[0]=std::byte{11};
+        check(!programcodec::decode(future,restored),"FPRG10 payload with future version rejected");
+        // Out-of-range (outside [-1,1]) controls are rejected by both reader
+        // and writer, transactionally.
+        auto wide=v10;
+        wide[wide.size()-programcodec::familyControlBytes]=std::byte{0};
+        wide[wide.size()-programcodec::familyControlBytes+1]=std::byte{0};
+        wide[wide.size()-programcodec::familyControlBytes+2]=std::byte{0xc0};
+        wide[wide.size()-programcodec::familyControlBytes+3]=std::byte{0x3f};
+        check(!programcodec::decode(wide,restored),"FPRG10 rejects out-of-range family controls");
+        auto writer=authored;
+        writer.layers[0].familyControls.primary=1.5f;
+        std::vector<std::byte> refused;
+        check(!programcodec::encode(writer,refused)&&refused.empty(),
+              "FPRG10 encode rejects out-of-range family controls transactionally");
+        writer.layers[0].familyControls.primary=std::numeric_limits<float>::quiet_NaN();
+        check(!programcodec::encode(writer,refused)&&refused.empty(),
+              "FPRG10 encode rejects non-finite family controls transactionally");
+        // v10 always carries the whole v7/v8/v9 extension chain (grain,
+        // glitch, travel) even when those blocks are neutral, so the appended
+        // family block sits at an unambiguous offset.
+        NoiseProgram same=authored;
+        same.layers[0].familyControls={};
+        std::vector<std::byte> noControls;
+        check(programcodec::encode(same,noControls)&&noControls.front()==std::byte{6}&&
+              v10.size()==noControls.size()+programcodec::grainBytes+programcodec::glitchBytes+
+                          programcodec::travelBytes+programcodec::familyControlBytes,
+              "FPRG10 carries the full v7-v9 extension chain plus its family block");
+        // Authored travel on a different layer migrates together with controls.
+        authored.layers[3].grains.travel=-.5f;
+        std::vector<std::byte> v10Travel;
+        check(programcodec::encode(authored,v10Travel)&&v10Travel.front()==std::byte{10}&&
+              programcodec::decode(v10Travel,restored)&&restored.layers[3].grains.travel==-.5f&&
+              restored.layers[0].familyControls==authored.layers[0].familyControls&&
+              programcodec::encode(restored,reencoded)&&reencoded==v10Travel,
+              "FPRG10 roundtrips authored travel and family controls across layers");
+        // Migration: clearing the controls re-encodes to the previous v9
+        // bytes — the older writer stays canonical for programs that do not
+        // use the new extension.
+        restored.layers[0].familyControls={};
+        std::vector<std::byte> migrated;
+        check(programcodec::encode(restored,migrated)&&migrated.front()==std::byte{9}&&
+              programcodec::decode(migrated,restored)&&restored.layers[3].grains.travel==-.5f&&
+              restored.layers[0].familyControls==source::FamilyControls{},
+              "clearing family controls migrates an FPRG10 program back to FPRG9");
+        // A v9 payload decodes with neutral controls and re-encodes to its
+        // own bytes: the v10 reader invents no extension for old programs.
+        NoiseProgram fromV9;
+        std::vector<std::byte> againV9;
+        check(programcodec::decode(migrated,fromV9)&&
+              fromV9.layers[0].familyControls==source::FamilyControls{}&&
+              fromV9.layers[3].familyControls==source::FamilyControls{}&&
+              programcodec::encode(fromV9,againV9)&&againV9==migrated,
+              "FPRG9 payloads stay byte-identical through the v10 reader");
+        // A pure negative-zero control triple compares neutral: it must not
+        // force the v10 extension on encode.
+        NoiseProgram negZero;
+        negZero.layers[0].familyControls={-0.0f,-0.0f,-0.0f};
+        std::vector<std::byte> canonical;
+        check(programcodec::encode(negZero,canonical)&&canonical.front()!=std::byte{10},
+              "neutral negative-zero controls do not select FPRG10");
+        // A mixed authored/negative-zero word roundtrips byte-identically.
+        authored.layers[3].grains.travel=0;
+        authored.layers[0].familyControls={.35f,-0.0f,.7f};
+        std::vector<std::byte> mixed;
+        check(programcodec::encode(authored,mixed)&&mixed.front()==std::byte{10}&&
+              programcodec::decode(mixed,restored)&&programcodec::encode(restored,reencoded)&&reencoded==mixed,
+              "mixed authored and negative-zero control words roundtrip canonically");
     }
     p.layers[0].gain=std::numeric_limits<float>::quiet_NaN();
     check(!vox::fx::programcodec::encode(p,again)&&again==before,"invalid encode is transactional");
