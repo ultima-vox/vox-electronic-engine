@@ -1,5 +1,26 @@
 # VOX FX release evidence ledger
 
+## 2026-11-22 — product-completion tranche, HOLD retained
+
+- The assigned Arena branch remains separate from exact PR #156 head
+  `5c2f122c0203dde57bda7cd563340164601579b4`; no merge or integrated-candidate
+  claim is made. See [exact requirement map](ENGINEERING_REQUIREMENT_MAP_20261122.md).
+- Source-family controls now have a real `FamilyControls` binding in
+  `NoiseRiser`, `SourcePanel`, `Generator` lock preservation, and forward-only
+  Program codec v10 migration. Existing codecs, Wavefold type ID, and host
+  parameter IDs are preserved.
+- Drive and Wavefold now use bounded first-order ADAA; local nonlinear/effects
+  regressions pass. This is not Windows, DAW, loaded-RT, listening, production
+  receipt, RC, merge, or release evidence. See
+  [NONLINEAR_ALIAS_20261122.md](NONLINEAR_ALIAS_20261122.md).
+- The accepted FX-T18 parser package is frozen at `1.11.0` and remains
+  diagnostic-only. Counters remain observed `5/4/9`, reconciled `5/3/8`, one
+  unmatched noncontrolled stop, zero unmatched controlled joins; no production
+  timing qualification is granted.
+- Review content remains exactly `232 review-only / 0 approved`; the `600`
+  approved-program target is unchanged. No raw audio transfer or catalog
+  expansion occurred.
+
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
 - [Granular Travel](GRANULAR_TRAVEL_20261119.md): per-layer scan of grain starts, distinct from pitch and reverse, with opt-in FPRG v9 state requiring review. Legacy v6–v8 encodings, host IDs, Save, and offered drag contracts are unchanged. See the [integrated candidate plan](INTEGRATED_CANDIDATE_PLAN_20261119.md).

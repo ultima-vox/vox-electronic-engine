@@ -3,12 +3,20 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <string>
 #ifdef VOX_TEST_INTERPOSE_MALLOC
 #include "AllocationProbe.h"
 #endif
 int main(){
     using namespace vox::fx::effects;int fails=0;
     auto check=[&](bool b,const char* m){if(!b){std::printf("FAIL: %s\n",m);++fails;}};
+    for(unsigned type=0;type<static_cast<unsigned>(Type::count);++type){
+        const auto selected=static_cast<Type>(type);
+        check(amountLabel(selected)!=nullptr&&amountHelp(selected)!=nullptr,"every effect exposes a type-specific amount contract");
+    }
+    check(std::string(amountLabel(Type::tempoDelay))=="Feedback"&&
+          std::string(amountLabel(Type::delay))=="Time / feedback"&&
+          std::string(amountLabel(Type::wavefold))=="Fold depth","delay and nonlinear controls retain distinct semantics");
     for(double rate:{44100.0,48000.0,96000.0}){
         Chain c;check(c.prepare(rate),"prepare");
         std::array<float,512> l{},r{};for(std::size_t i=0;i<l.size();++i){l[i]=std::sin(i*.07)*.25f;r[i]=-l[i];}

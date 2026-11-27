@@ -1,6 +1,6 @@
 # VOX FX engineering candidate evidence — Draft #156
 
-**Development candidate only / HOLD / NO MERGE.** The Windows run is neither requested nor authorized. Product source `b34be7efe14efd549ae4d2033b76613556a1661a` follows the accepted Delay/Source package, Granular Travel, family depth and the antialiased Drive slice, on top of Draft CI-only head `5c2f122`. See the [TL phase order](INTEGRATED_CANDIDATE_PLAN_20261119.md). Before any owner-authorized run, re-pin the exact reviewed **integrated** PR head and record commit, tree, compiler, dependencies and product hashes in the same receipt. Do not substitute a different checkout or a synthetic merge commit.
+**Development candidate only / HOLD / NO MERGE.** The Windows run is neither requested nor authorized. This historical table is retained, but its old source label is not the current integrated candidate. Use the [2026-11-22 exact requirement map](ENGINEERING_REQUIREMENT_MAP_20261122.md) for the current Arena source, exact remote PR #156 head `5c2f122c0203dde57bda7cd563340164601579b4`, and lineage limitation. The current tranche adds FPRG v10 family controls and ADAA Wavefold; see [current nonlinear evidence](NONLINEAR_ALIAS_20261122.md). Before any owner-authorized run, re-pin the exact reviewed **integrated** PR head and record commit, tree, compiler, dependencies and product hashes in the same receipt. Do not substitute a different checkout or a synthetic merge commit.
 
 | Area | Evidence available now | Outstanding qualification |
 |---|---|---|

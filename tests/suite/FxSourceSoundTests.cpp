@@ -64,6 +64,16 @@ int main(){
             check(std::isfinite(x)&&std::isfinite(y)&&std::abs(x)<1&&std::abs(y)<1,"family character remains finite below full scale");}
         check(diff>.02,"family character changes the actual waveform");
     }
+    for(unsigned i=0;i<12;++i){
+        NoiseProgram plain;plain.layers[0].family=static_cast<NoiseFamily>(i);
+        auto authored=plain;authored.layers[0].familyControls={.65f,-.45f,.55f};
+        a->prepare(48000);b->prepare(48000);a->setProgram(plain);b->setProgram(authored);
+        check(a->noteOn(1,60,1,.6)&&b->noteOn(1,60,1,.6),"admit type-specific control fixture");
+        double diff=0;
+        for(int n=0;n<12000;++n){float l,r,x,y;a->render(&l,&r,1);b->render(&x,&y,1);diff+=std::abs(l-x);
+            check(std::isfinite(x)&&std::isfinite(y)&&std::abs(x)<1&&std::abs(y)<1,"type-specific controls remain bounded");}
+        check(diff>.02,"type-specific controls change the actual waveform");
+    }
     ProgramStore store;const auto stale=store.versionedProgram().revision;
     check(store.publish(q)&&!store.editTonalityIfRevision({Scale::minor,4},stale),"stale key editor cannot overwrite replacement");
     check(!store.editLayerIfRevision(0,stale,[](NoiseLayer& l){l.transpose=-12;}),"stale source editor cannot overwrite replacement");

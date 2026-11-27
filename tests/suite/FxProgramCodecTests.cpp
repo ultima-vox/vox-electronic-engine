@@ -66,7 +66,7 @@ int main() {
     p.bars=16; std::vector<std::byte> barBytes; check(vox::fx::programcodec::encode(p,barBytes)&&vox::fx::programcodec::decode(barBytes,migrated)&&migrated.bars==16,"bar roundtrip");
     if(barBytes.size()<4) { std::printf("FAIL: bar fixture too short\n"); return 1; }
     auto invalidBars=barBytes;invalidBars[invalidBars.size()-soundBytes-12]=std::byte{3};check(!vox::fx::programcodec::decode(invalidBars,migrated)&&migrated.bars==16,"invalid bars rejected transactionally");
-    auto future=bytes;future[0]=std::byte{10};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
+    auto future=bytes;future[0]=std::byte{11};check(!vox::fx::programcodec::decode(future,q),"future version rejected");
     auto invalidMode=bytes;invalidMode[invalidMode.size()-soundBytes-8]=std::byte{255};
     check(!vox::fx::programcodec::decode(invalidMode,q),"invalid playback mode rejected");
     auto invalidBool=bytes;invalidBool[4]=std::byte{2};check(!vox::fx::programcodec::decode(invalidBool,q),"invalid enabled rejected");
@@ -144,6 +144,28 @@ int main() {
         scan.layers[2].glitch={};
         check(programcodec::encode(scan,v9)&&programcodec::decode(v9,read)&&read.layers[2].glitch==source::GlitchShape{},
               "travel-only programs can carry default Glitch words in FPRG9");
+    }
+    {
+        using namespace vox::fx;
+        NoiseProgram authored;
+        authored.layers[0].family=NoiseFamily::formant;
+        authored.layers[0].familyControls={.35f,-.2f,.7f};
+        std::vector<std::byte> v10,reencoded;
+        NoiseProgram restored;
+        check(programcodec::encode(authored,v10)&&v10.front()==std::byte{10}&&
+              v10.size()>=programcodec::familyControlBytes+programcodec::travelBytes&&
+              programcodec::decode(v10,restored)&&restored.layers[0].familyControls==authored.layers[0].familyControls&&
+              programcodec::encode(restored,reencoded)&&reencoded==v10,
+              "FPRG10 roundtrips type-specific family controls");
+        auto neutral=v10;std::fill(neutral.end()-programcodec::familyControlBytes,neutral.end(),std::byte{0});
+        check(!programcodec::decode(neutral,restored),"FPRG10 rejects redundant neutral family controls");
+        auto invalid=v10;
+        invalid[invalid.size()-programcodec::familyControlBytes]=std::byte{0};
+        invalid[invalid.size()-programcodec::familyControlBytes+1]=std::byte{0};
+        invalid[invalid.size()-programcodec::familyControlBytes+2]=std::byte{128};
+        invalid[invalid.size()-programcodec::familyControlBytes+3]=std::byte{0x7f};
+        check(!programcodec::decode(invalid,restored),"FPRG10 rejects nonfinite family controls transactionally");
+        auto truncated=v10;truncated.pop_back();check(!programcodec::decode(truncated,restored),"FPRG10 rejects truncation");
     }
     p.layers[0].gain=std::numeric_limits<float>::quiet_NaN();
     check(!vox::fx::programcodec::encode(p,again)&&again==before,"invalid encode is transactional");

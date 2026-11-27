@@ -13,6 +13,20 @@ mod::Source sourceForControl(int id) noexcept {
     if(id==11)return mod::Source::random;
     return mod::Source::count;
 }
+constexpr const char* familyControlNames[12][3]{
+    {"Noise colour", "Sweep bias", "Exciter"},
+    {"Tone balance", "Fall motion", "Noise skirt"},
+    {"Partial spread", "Rotation", "Partial density"},
+    {"Body", "Pitch drop", "Noise hit"},
+    {"Air", "Doppler", "Delay mix"},
+    {"Beam body", "Sweep range", "Click"},
+    {"Resonance", "Sweep range", "Noise skirt"},
+    {"Mode spread", "Mode motion", "Strike density"},
+    {"Detune", "Texture motion", "Noise colour"},
+    {"Vowel spacing", "Vowel motion", "Exciter"},
+    {"Slice edge", "Read motion", "Slice level"},
+    {"Grain level", "Pitch motion", "Grain density"}
+};
 }
 GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     const char* names[]{"Style seed", "Active layers", "Intensity", "Energy", "Stereo", "Sound role"};
@@ -398,6 +412,19 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     slider(character_,-100,100,.1,"Source character (relative to legacy)"," %");
     character_.onStructuralChange=[this]{const auto value=static_cast<float>(character_.getValue()*.01);editLayer([=](NoiseLayer& l){l.character=value;});};
     addAndMakeVisible(characterLabel_);
+    for(std::size_t i=0;i<familyControls_.size();++i){
+        slider(familyControls_[i],-100,100,.1,"Family control"," %");
+        familyControls_[i].onStructuralChange=[this,i]{
+            const auto value=static_cast<float>(familyControls_[i].getValue()*.01);
+            editLayer([i,value](NoiseLayer& l){
+                auto& controls=l.familyControls;
+                if(i==0)controls.primary=value;else if(i==1)controls.motion=value;else controls.density=value;
+            });
+        };
+        familyControlLabels_[i].setJustificationType(juce::Justification::centredLeft);
+        familyControlLabels_[i].setFont(vox::ui::typography::controlLabel());
+        addAndMakeVisible(familyControlLabels_[i]);
+    }
     slider(grainLength_,10,180,.1,"Grain length"," ms");slider(grainPosition_,0,100,.1,"Grain start"," %");
     grainLength_.onStructuralChange=[this]{const auto value=static_cast<float>(grainLength_.getValue());editLayer([=](auto& l){l.grains.milliseconds=value;});};
     slider(grainTravel_,-100,100,1,"Grain travel across the layer timeline"," %");
@@ -462,6 +489,7 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     int order=0;
     const auto tab=[&](juce::Component& child){child.setExplicitFocusOrder(++order);};
     tab(layer_);tab(root_);tab(scale_);tab(transpose_);tab(character_);
+    for(auto& control:familyControls_)tab(control);
     for(auto& f:filters_){tab(f.type);tab(f.slope);tab(f.hz);tab(f.q);}
     tab(grainLength_);tab(grainPosition_);tab(grainTravel_);tab(scatter_);tab(reverse_);
     tab(sliceGrid_);tab(sliceRead_);for(auto& gate:sliceGate_)tab(gate);tab(sliceReset_);tab(close_);
@@ -507,9 +535,16 @@ void SourcePanel::refresh(){
     scale_.setSelectedId(static_cast<int>(snapshot.program.tonality.scale)+1,juce::dontSendNotification);
     root_.setEnabled(snapshot.program.tonality.scale!=source::Scale::chromatic);
     constexpr const char* characterNames[]{"Noise brightness","Tonal blend","Partial brightness","Sub level","Doppler depth","Sweep range","Resonance","Upper modes","Detune","Vowel spacing","Slice edge","Grain density"};
-    const auto* name=characterNames[static_cast<unsigned>(layer.family)];
+    const auto familyIndex=static_cast<unsigned>(layer.family);
+    const auto* name=characterNames[familyIndex];
     characterLabel_.setText(name,juce::dontSendNotification);character_.setTitle(name);
     if(!character_.isMouseButtonDown())character_.setValue(layer.character*100,juce::dontSendNotification);
+    for(std::size_t i=0;i<familyControls_.size();++i){
+        familyControlLabels_[i].setText(familyControlNames[familyIndex][i],juce::dontSendNotification);
+        familyControls_[i].setTitle(familyControlNames[familyIndex][i]);
+        const auto value=i==0?layer.familyControls.primary:i==1?layer.familyControls.motion:layer.familyControls.density;
+        if(!familyControls_[i].isMouseButtonDown())familyControls_[i].setValue(value*100,juce::dontSendNotification);
+    }
     if(!transpose_.isMouseButtonDown())transpose_.setValue(layer.transpose,juce::dontSendNotification);
     const bool glitch=layer.family==NoiseFamily::glitch;
     const bool granular=layer.family==NoiseFamily::granular;
@@ -568,7 +603,14 @@ void SourcePanel::resized(){
     layer_.setBounds(first.removeFromLeft(142).reduced(2));root_.setBounds(first.removeFromLeft(78).reduced(2));scale_.setBounds(first.removeFromLeft(145).reduced(2));
     auto voice=a.removeFromTop(36);
     transpose_.setBounds(voice.removeFromLeft(248).reduced(2));
-    characterLabel_.setBounds(voice.removeFromLeft(108).reduced(2));character_.setBounds(voice.reduced(2));a.removeFromTop(24);
+    characterLabel_.setBounds(voice.removeFromLeft(108).reduced(2));character_.setBounds(voice.reduced(2));
+    auto family=a.removeFromTop(38);
+    for(std::size_t i=0;i<familyControls_.size();++i){
+        auto cell=family.removeFromLeft(family.getWidth()/(static_cast<int>(familyControls_.size()-i)));
+        familyControlLabels_[i].setBounds(cell.removeFromTop(16).reduced(2,0));
+        familyControls_[i].setBounds(cell.reduced(2,0));
+    }
+    a.removeFromTop(8);
     for(auto& f:filters_){auto row=a.removeFromTop(31);row.removeFromLeft(28);
         f.type.setBounds(row.removeFromLeft(118).reduced(2));f.slope.setBounds(row.removeFromLeft(110).reduced(2));
         f.hz.setBounds(row.removeFromLeft(row.getWidth()/2).reduced(2));f.q.setBounds(row.reduced(2));}
@@ -1085,7 +1127,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         for (std::size_t n=0;n<std::size(names);++n) type.addItem(names[n],static_cast<int>(n+1));
         type.setTitle("Shared effect slot " + juce::String(static_cast<int>(i+1)));
         type.setTooltip("Tempo Delay: eighth-note tap at host BPM (120 if unavailable, 30 BPM minimum); Amount is feedback");
-        type.onChange=[this,i] { auto s=processor_.effect(i);s.type=static_cast<effects::Type>(effectsType_[i].getSelectedId()-1);(void)processor_.setEffect(i,s); };
+        type.onChange=[this,i] { auto s=processor_.effect(i);s.type=static_cast<effects::Type>(effectsType_[i].getSelectedId()-1);(void)processor_.setEffect(i,s);refreshEffectSemantics(i); };
         addAndMakeVisible(type);
         for (auto* slider : {&effectsWet_[i],&effectsAmount_[i]}) {
             slider->setRange(0,1,.001);slider->setSliderStyle(juce::Slider::LinearHorizontal);
@@ -1098,6 +1140,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         wetAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(processor_.effectWetParameter(i),effectsWet_[i]);
         amountAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(processor_.effectAmountParameter(i),effectsAmount_[i]);
         const auto s=processor_.effect(i);type.setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
+        refreshEffectSemantics(i);
     }
     patternSelector_.setTextWhenNothingSelected("Load seed pattern...");
     patternSelector_.setTitle("Load trigger seed pattern");
@@ -1557,6 +1600,15 @@ void FxPanel::refreshMacro()
         if(config.routes[i].source==source&&config.routes[i].destination==destination){depth=config.routes[i].depth;break;}
     if(!macroDepth_.isMouseButtonDown()&&!macroDepth_.hasKeyboardFocus(true))macroDepth_.setValue(depth,juce::dontSendNotification);
 }
+void FxPanel::refreshEffectSemantics(std::size_t index)
+{
+    if(index>=effectsType_.size())return;
+    const auto type=static_cast<effects::Type>(std::max(0,effectsType_[index].getSelectedId()-1));
+    const auto prefix="Slot "+juce::String(static_cast<int>(index+1))+" ";
+    effectsAmount_[index].setTitle(prefix+effects::amountLabel(type));
+    effectsAmount_[index].setTooltip(effects::amountHelp(type));
+    effectsWet_[index].setTooltip("Host-automatable wet mix for the selected effect type");
+}
 void FxPanel::refreshExportControls()
 {
     using Kind=fileexport::Kind;
@@ -1675,6 +1727,7 @@ void FxPanel::timerCallback()
     for (std::size_t i=0;i<4;++i) {
         const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));
         effectsType_[i].setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
+        refreshEffectSemantics(i);
     }
     if (sourcePanel_.isVisible()) sourcePanel_.refresh();
     if (programCurves_.isVisible()) programCurves_.refresh();

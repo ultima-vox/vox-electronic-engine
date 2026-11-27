@@ -15,6 +15,47 @@ inline double tempoDelaySeconds(double tempo) noexcept {
     return 30.0/std::clamp(std::isfinite(tempo)?tempo:120.,30.,1000.);
 }
 enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, delay, chorus, reverb, tempoDelay, count };
+// The existing host Amount lane has a type-specific meaning. Keeping these
+// labels in the engine makes the same binding explicit in the native editor
+// without adding or renaming any host parameter IDs.
+inline constexpr const char* amountLabel(Type type) noexcept {
+    switch(type){
+        case Type::bypass:return "Amount (unused)";
+        case Type::lowpass:return "Cutoff";
+        case Type::drive:return "Saturation";
+        case Type::wavefold:return "Fold depth";
+        case Type::bitcrush:return "Bit reduction";
+        case Type::ring:return "Ring frequency";
+        case Type::gate:return "Gate rate";
+        case Type::phaser:return "Sweep depth";
+        case Type::flanger:return "Delay modulation";
+        case Type::delay:return "Time / feedback";
+        case Type::chorus:return "Modulation depth";
+        case Type::reverb:return "Room / decay";
+        case Type::tempoDelay:return "Feedback";
+        case Type::count:break;
+    }
+    return "Amount";
+}
+inline constexpr const char* amountHelp(Type type) noexcept {
+    switch(type){
+        case Type::lowpass:return "Type-specific cutoff from 60 Hz to 18 kHz";
+        case Type::drive:return "Antialiased saturation depth; amount 0 is transparent";
+        case Type::wavefold:return "Antialiased fold depth; amount 0 is transparent";
+        case Type::bitcrush:return "Quantization reduction, bounded to 1–15 bits";
+        case Type::ring:return "20 Hz to 2 kHz ring modulation carrier";
+        case Type::gate:return "1 Hz to 16 Hz synced gate";
+        case Type::phaser:return "Bounded four-stage stereo sweep";
+        case Type::flanger:return "Bounded fractional stereo delay motion";
+        case Type::delay:return "50–500 ms free delay and up to 75% feedback";
+        case Type::tempoDelay:return "Host eighth-note delay; amount controls feedback";
+        case Type::chorus:return "Bounded 9–23 ms stereo modulation";
+        case Type::reverb:return "Bounded room feedback and tail";
+        case Type::bypass:return "No effect processing";
+        case Type::count:break;
+    }
+    return "Type-specific effect control";
+}
 struct Settings {
     Type type=Type::bypass;
     float wet=1, amount=.5f;
@@ -108,6 +149,7 @@ class Chain {
         unsigned syncFade=0;
         detail::FreeDelayTap freeTap;
         double drivePreviousL=0,drivePreviousR=0;
+        double foldPreviousL=0,foldPreviousR=0;
         std::array<std::size_t,4> reverbL{},reverbR{};
     };
     struct Bank { std::vector<float> left,right; };
@@ -140,9 +182,12 @@ public:
         // A silent input feeds an identically silent input into a new nonlinear
         // stage, so any stale ADAA history is inaudible. Starting from zero
         // keeps a freshly selected Drive slot deterministic.
-        if(slots_[slot].desired.type!=settings.type)
+        if(slots_[slot].desired.type!=settings.type) {
             slots_[slot].current.drivePreviousL=slots_[slot].current.drivePreviousR=
                 slots_[slot].old.drivePreviousL=slots_[slot].old.drivePreviousR=0;
+            slots_[slot].current.foldPreviousL=slots_[slot].current.foldPreviousR=
+                slots_[slot].old.foldPreviousL=slots_[slot].old.foldPreviousR=0;
+        }
         slots_[slot].desired=settings;return true;
     }
     void process(float* left,float* right,std::size_t count,const float* modulation=nullptr) noexcept {
@@ -178,6 +223,28 @@ private:
         const auto previous=index==0?size-1:index-1;
         const double older=state.age>whole?buffer[previous]:0.0;
         return buffer[index]*(1-fraction)+older*fraction;
+    }
+    static double wavefold(double value,double gain) noexcept {
+        constexpr double pi=3.14159265358979323846;
+        return (2.0/pi)*std::asin(std::sin(pi*value*gain*.5));
+    }
+    // Antiderivative of the unit-periodized triangle fold in the gain-scaled
+    // domain. Its period integral is zero, so reducing to [0,4) preserves the
+    // exact first-order ADAA difference across fold turns without allocation.
+    static double wavefoldIntegral(double value) noexcept {
+        double phase=std::fmod(value,4.0);
+        if(phase<0)phase+=4.0;
+        if(phase<=1.0)return .5*phase*phase;
+        if(phase<=3.0)return 2.0*phase-.5*phase*phase-1.0;
+        return .5*phase*phase-4.0*phase+8.0;
+    }
+    static double wavefoldAdaa(double value,double& previous,double gain) noexcept {
+        const double delta=value-previous;
+        const double result=std::abs(delta)>1.0e-9
+            ?(wavefoldIntegral(gain*value)-wavefoldIntegral(gain*previous))/(gain*delta)
+            :wavefold(value,gain);
+        previous=value;
+        return result;
     }
     void apply(State& state,Bank& bank,float amount,float targetAmount,double& l,double& r) noexcept {
         constexpr double tau=6.2831853071795864769;
@@ -230,8 +297,13 @@ private:
         }
         case Type::wavefold: {
             const double gain=1+7*amount;
-            auto fold=[gain](double x){x=std::clamp(x*gain,-8.0,8.0);return 2.0/std::acos(-1.0)*std::asin(std::sin(std::acos(-1.0)*x*.5));};
-            l=fold(l);r=fold(r);break;
+            if(amount==0.0) {
+                state.foldPreviousL=l;state.foldPreviousR=r;
+                break;
+            }
+            l=wavefoldAdaa(l,state.foldPreviousL,gain);
+            r=wavefoldAdaa(r,state.foldPreviousR,gain);
+            break;
         }
         case Type::bitcrush: {const double levels=std::round(32768.0*std::pow(1.0/8192.0,amount));
             l=std::round(std::clamp(l,-1.0,1.0)*levels)/levels;
