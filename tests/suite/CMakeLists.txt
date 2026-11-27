@@ -496,8 +496,10 @@ set_tests_properties(suite_fx_transport_tests PROPERTIES LABELS suite)
 # and holds non-silence / no-clip regressions at output=1.0.
 add_executable(suite_fx_gain_staging_tests FxGainStagingTests.cpp)
 vox_suite_add_allocation_probe(suite_fx_gain_staging_tests)
-target_include_directories(suite_fx_gain_staging_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
-target_link_libraries(suite_fx_gain_staging_tests PRIVATE vox_preset)
+# sample::decodeWav (asset-cue sources) hashes with juce::SHA256.
+target_include_directories(suite_fx_gain_staging_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx ${juce_SOURCE_DIR}/modules)
+target_compile_definitions(suite_fx_gain_staging_tests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(suite_fx_gain_staging_tests PRIVATE vox_preset juce::juce_cryptography)
 add_test(NAME suite_fx_gain_staging_tests COMMAND suite_fx_gain_staging_tests)
 set_tests_properties(suite_fx_gain_staging_tests PROPERTIES LABELS suite)
 

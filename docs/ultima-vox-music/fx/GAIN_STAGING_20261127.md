@@ -118,3 +118,46 @@ spread seen today).
 - [ ] Family-isolation measurements and calibrated trims.
 - [ ] Master-scale recalibration + polyphony headroom measurements.
 - [ ] Before/after table, Drive compatibility re-run, owner review.
+
+---
+
+## P1 harness corrections (TL review 7224771869, applied)
+
+The baseline commit `a65fbd7` was accepted as diagnostic-only; its measurement
+harness required corrections before it can support a calibrated gain change.
+All P1 items from the review are now implemented in
+`tests/suite/FxGainStagingTests.cpp` (suite target
+`suite_fx_gain_staging_tests`):
+
+| Review item | Correction |
+| --- | --- |
+| assetCue captures bypassed the user sample | Recipes now go through `content::waveb::makeAssetPreview` and decode the authored WAV with `sample::decodeWav` (supported path), publishing `capture.sample`/`capture.sampleRate` to the store. Missing decodes are collected separately (`missingAssets`, must be empty — currently 0). |
+| Row count instead of ID-set equality | The measured recipe ID set is compared for exact equality against the canonical inventory ID set (232 IDs), plus an explicit `inventory == 232` gate. |
+| Levels measured from PCM24 bytes | Levels now come from `renderFloats`, a line-faithful replica of `renderWavImpl` (same setup order, scheduling, `macro::renderPost`), measured pre-encoding. Status is distinguished: `invalid` / `setup-failed` / `overload` / `ok`; silence is an analysis property of an ok render. |
+| No status distinction | `renderFloats` reports `invalidCapture` (bad program/settings), `setupFailed` (any engine/chain/macro step returns false), `overload` (non-finite or abs>1 sample — the exact `renderWavImpl` reject condition), or `ok`. All 464 baseline renders reach `ok`. |
+| printf-only path checks | Controlled legs (6 fixtures: oneshot / bars / gate / sequence / both asset cues), each with asserted tolerances: (A) `renderWav` float32 is **bit-identical** to the replica floats; (B) two **independent captures** gain 1.0 vs 0.5 are sample-wise linear (max abs err <= 1e-6); (C) PCM24 header is stereo 24-bit at 48 kHz and quantization <= 1 LSB (measured 0.5 LSB) against float32; (D) Preview Bus mix reproduces published PCM exactly (max err 0) after the 5 ms crossfade. 30/30 leg checks pass. |
+| Algebraic `outHalfDiff` | Removed entirely; leg B replaces it with real independent renders. |
+| Engine-direct path lacked the full pipeline | Removed; the replica IS the full pipeline (tempo, bar clock, voice motion, macro bases, user-sample store, program, preview/pattern noteOn, chain, effects, `renderPost` with the output gain) and is asserted byte-equal to the shipping float32 export path. |
+| Sequence active window | Sequence recipes use exactly one pattern cycle as the active window (`cycleFrames` from `tickToSample`); bars/oneshot use the event window. Active and tail peaks are reported separately (new `tail_peak_dbfs` column). |
+| Authored baseline | Every recipe now has two TSV rows: `authored` (frozen note/BPM/velocity/duration from the recipe row) and `normalized` (note 60 / velocity 1.0 / 120 BPM). Authored peak p50 = **-42.6 dBFS**; normalized peak p50 = **-42.5 dBFS**. |
+| Runtime bound | Full run (464 renders + 30 leg checks) = **47.5 s**; full suite ctest = 79/79 in 256.9 s. |
+
+PCM24 quantization vs float32 is documented in the harness header: PCM24 is
+only used for format-correctness and the 1 LSB check; no sample-exact claim is
+made from quantized bytes (float32 export is the bit-exact reference).
+
+Evidence: `evidence/gain-baseline-p1-20261127.tsv` (464 recipe rows + 12 leg
+rows; header documents all columns).
+
+Baseline numbers are unchanged by the corrections (normalized variant):
+peak p10/50/90 = -50.0 / -42.5 / -35.1 dBFS, active RMS p50 = -58.9 dBFS,
+quietest `voxfx.riser.meridian-gauze` -55.5 dB, loudest
+`voxfx.rhythm.neon-fault` -27.9 dB, 0 silent, 0 overloaded, 0 above -5 dBFS
+headroom floor. The two asset cues now measure their authored WAVs
+(`voxfx.sweep.vellum-coil` -55.7 dB, `voxfx.atmosphere.kiln-choir`) instead
+of the builtin fallback.
+
+**No DSP change is included in this commit** — the harness correction is
+measurement-only. The P0 gain design (post-chain makeup vs pre-chain trim,
+polyphony/velocity/tail coverage) remains open per the review; the UI rebuild
+runs in parallel and is not gated on it.
