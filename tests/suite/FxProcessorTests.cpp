@@ -1652,6 +1652,7 @@ int main() {
         auto processor = std::make_unique<FxProcessor>();
         auto panelStorage3=std::make_unique<vox::fx::FxPanel>(*processor); auto& panel=*panelStorage3;
         panel.setSize(1040,700);
+        panel.setWorkspace(vox::fx::FxPanel::Workspace::design);
         auto& toggle = panel.programCurvesButton();
         auto& curves = panel.programCurves();
         check(!curves.isVisible() && panel.layerPanel(0).isVisible(), "opens on layer cards");

@@ -24,8 +24,14 @@ VoxKeyboard::VoxKeyboard()
     setWantsKeyboardFocus (true);
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
     setTooltip ("Performance keyboard: click or drag across keys; arrows move the cursor key; "
-                "Space/Enter or Z presses it, X releases it; OCT-/+ shift the range; VEL is the "
-                "explicit fixed velocity. Host MIDI is indication only and is never released here.");
+                "Space/Enter presses it and X releases it (Z presses it too); OCT-/+ shift the "
+                "range; VEL is the explicit fixed velocity. Host MIDI is indication only.");
+    setTitle ("Performance keyboard");
+    setDescription ("Native performance keyboard. Pointer, Space/Enter and Z/X start and stop "
+                    "notes with distinct ownership; host MIDI keys are shown as indication only.");
+    setHelpText ("Arrow keys move the cursor, Space/Enter or Z presses it, X releases it, "
+                 "Up/Down shifts the octave.");
+    setExplicitFocusOrder (2);
     for (auto& until : pulseUntil_) until = 0;
 }
 
@@ -78,11 +84,18 @@ void VoxKeyboard::pulseNote (int note)
     startTimer (30);
 }
 
+bool VoxKeyboard::pulseActive (int note) const noexcept
+{
+    if (note < lowNote || note > highNote) return false;
+    return pulseUntil_[static_cast<std::size_t> (note)] > juce::Time::getMillisecondCounter();
+}
+
 void VoxKeyboard::releaseAllNotes()
 {
     for (int note = lowNote; note <= highNote; ++note)
         if (held_[static_cast<std::size_t> (note)]) releaseNote (note);
-    dragNote_ = -1;
+    pointerNote_ = spaceNote_ = zNote_ = -1;
+    cursorHeld_ = false;
     if (onAllNotesOff) onAllNotesOff();
 }
 
@@ -175,10 +188,26 @@ void VoxKeyboard::releaseNote (int note)
     if (onNoteOff) onNoteOff (note);
 }
 
+void VoxKeyboard::releaseCapture (int& capture)
+{
+    if (capture < 0) return;
+    releaseNote (capture);
+    capture = -1;
+}
+
 void VoxKeyboard::repaintKey (int note)
 {
     const auto bounds = keyBounds (note);
     if (!bounds.isEmpty()) repaint (bounds.expanded (2));
+}
+
+void VoxKeyboard::clampCursorIntoView()
+{
+    const int first = firstVisibleNote(), last = lastVisibleNote();
+    if (cursorNote_ < first)
+        setBaseOctave (juce::jlimit (0, 8, cursorNote_ / 12));
+    else if (cursorNote_ > last)
+        setBaseOctave (juce::jlimit (0, 8, (cursorNote_ - visibleOctaves_ * 12 + 12) / 12));
 }
 
 void VoxKeyboard::resized()
@@ -212,14 +241,11 @@ void VoxKeyboard::mouseDown (const juce::MouseEvent& e)
     }
     const auto note = noteAt (e.getPosition());
     if (note < 0) return;
-    if (held_[static_cast<std::size_t> (note)])
-    {
-        // Repeated note: close the previous press, then start a fresh one so
-        // every press keeps a matching release.
-        releaseNote (note);
-    }
+    // Repeated note: close the previous press, then start a fresh one so
+    // every press keeps a matching release.
+    if (held_[static_cast<std::size_t> (note)]) releaseNote (note);
     pressNote (note);
-    dragNote_ = note;
+    pointerNote_ = note;
 }
 
 void VoxKeyboard::mouseDrag (const juce::MouseEvent& e)
@@ -231,39 +257,38 @@ void VoxKeyboard::mouseDrag (const juce::MouseEvent& e)
         setVelocity (static_cast<int> (std::lround (t * 126.0)) + 1);
         return;
     }
-    if (dragNote_ < 0) return;
+    if (pointerNote_ < 0) return;
     const auto note = noteAt (e.getPosition());
-    if (note >= 0 && note != dragNote_)
+    if (note >= 0 && note != pointerNote_)
     {
-        // Drag between keys: finish the old note, start the new one.
-        const auto previous = dragNote_;
-        dragNote_ = -1;
+        // Drag between keys: finish the old note, start the new one. Dragging
+        // outside the keyboard releases (mouseExit) and re-entry without a
+        // new press never restarts a note.
+        const auto previous = pointerNote_;
+        pointerNote_ = -1;
         releaseNote (previous);
         pressNote (note);
-        dragNote_ = note;
+        pointerNote_ = note;
     }
 }
 
 void VoxKeyboard::mouseUp (const juce::MouseEvent&)
 {
     velocityDragging_ = false;
-    if (dragNote_ >= 0) releaseNote (dragNote_);
-    dragNote_ = -1;
+    releaseCapture (pointerNote_);
 }
 
 void VoxKeyboard::mouseExit (const juce::MouseEvent&)
 {
     // Leaving the keyboard with the button down never strands a note.
     velocityDragging_ = false;
-    if (dragNote_ >= 0) releaseNote (dragNote_);
-    dragNote_ = -1;
+    releaseCapture (pointerNote_);
 }
 
 void VoxKeyboard::focusLost (juce::Component::FocusChangeType)
 {
     velocityDragging_ = false;
     releaseAllNotes();
-    cursorHeld_ = false;
 }
 
 bool VoxKeyboard::keyPressed (const juce::KeyPress& key)
@@ -272,12 +297,14 @@ bool VoxKeyboard::keyPressed (const juce::KeyPress& key)
     if (key == juce::KeyPress::leftKey)
     {
         cursorNote_ = juce::jmax (lowNote, cursorNote_ - 1);
+        clampCursorIntoView();
         repaint();
         return true;
     }
     if (key == juce::KeyPress::rightKey)
     {
         cursorNote_ = juce::jmin (highNote, cursorNote_ + 1);
+        clampCursorIntoView();
         repaint();
         return true;
     }
@@ -296,21 +323,27 @@ bool VoxKeyboard::keyPressed (const juce::KeyPress& key)
         if (!cursorHeld_)
         {
             cursorHeld_ = true;
-            if (held_[static_cast<std::size_t> (cursorNote_)]) releaseNote (cursorNote_);
+            // Capture the started key id: later cursor movement cannot
+            // retarget this release.
+            if (spaceNote_ >= 0) releaseNote (spaceNote_);
+            else if (held_[static_cast<std::size_t> (cursorNote_)]) releaseNote (cursorNote_);
             pressNote (cursorNote_);
-            dragNote_ = cursorNote_;
+            spaceNote_ = cursorNote_;
             startTimer (30); // poll for key release (JUCE has no keyUp event)
         }
         return true;
     }
     if (key == juce::KeyPress ('z') || key == juce::KeyPress ('Z'))
     {
-        if (!held_[static_cast<std::size_t> (cursorNote_)]) pressNote (cursorNote_);
+        if (zNote_ >= 0 && zNote_ != cursorNote_) releaseCapture (zNote_);
+        if (held_[static_cast<std::size_t> (cursorNote_)]) releaseNote (cursorNote_);
+        pressNote (cursorNote_);
+        zNote_ = cursorNote_;
         return true;
     }
     if (key == juce::KeyPress ('x') || key == juce::KeyPress ('X'))
     {
-        releaseNote (cursorNote_);
+        releaseCapture (zNote_); // releases the key Z captured, not the cursor
         return true;
     }
     return false;
@@ -338,58 +371,61 @@ void VoxKeyboard::paint (juce::Graphics& g)
     g.setFont (typography::makeFont (typography::controlLabelPx, "SemiBold"));
     g.drawText ("VEL " + juce::String (velocity_), velocityBounds_, juce::Justification::centred);
 
-    // Piano keys.
+    // Piano keys: ALL whites first, then ALL blacks on top, so later white
+    // keys never overpaint an earlier black key's overlap column.
     const auto now = juce::Time::getMillisecondCounter();
     const auto white = text.interpolatedWith (panel, 0.18); // light rubber faces
     const auto black = control;
+    const auto faceFor = [&] (int note, bool isBlackKey) {
+        const bool pulsing = pulseUntil_[static_cast<std::size_t> (note)] > now;
+        const bool isHeld = held (note);
+        // Event mode (one-shot): a held press shows only the launch flash,
+        // never a sustained gate visual.
+        const bool showHeld = isHeld && !(eventMode_ && !pulsing);
+        if (pulsing) return accentHover;
+        if (showHeld) return isBlackKey ? accent : accent;
+        if (external (note)) return isBlackKey ? accentDim : white.interpolatedWith (accentDim, 0.45);
+        return isBlackKey ? black : white;
+    };
     for (int note = firstVisibleNote(); note <= lastVisibleNote(); ++note)
     {
+        if (isBlack (note)) continue;
         auto kb = keyBounds (note);
         if (kb.isEmpty()) continue;
-        const bool isHeld = held (note);
-        const bool isExternal = external (note);
-        const bool pulsing = pulseUntil_[static_cast<std::size_t> (note)] > now;
-        if (isBlack (note))
+        g.setColour (faceFor (note, false));
+        g.fillRoundedRectangle (kb.toFloat().reduced (0.5f, 0.5f), 2.0f);
+        const bool flash = pulseUntil_[static_cast<std::size_t> (note)] > now ||
+                           (held (note) && !eventMode_);
+        g.setColour (flash ? border : borderSubtle);
+        g.drawRoundedRectangle (kb.toFloat().reduced (0.5f), 2.0f, 1.0f);
+        if (note % 12 == 0)
         {
-            auto face = black;
-            if (pulsing) face = accentHover;
-            else if (isHeld) face = accent;
-            else if (isExternal) face = accentDim;
-            g.setColour (face);
-            g.fillRoundedRectangle (kb.toFloat(), 2.0f);
-            g.setColour (border);
-            g.drawRoundedRectangle (kb.toFloat().reduced (0.5f), 2.0f, 1.0f);
+            g.setColour (flash ? background : textMuted);
+            g.setFont (typography::valueText());
+            g.drawText ("C" + juce::String (note / 12), kb.removeFromBottom (14),
+                        juce::Justification::centred);
         }
-        else
-        {
-            auto face = white;
-            if (pulsing) face = accentHover;
-            else if (isHeld) face = accent;
-            else if (isExternal) face = white.interpolatedWith (accentDim, 0.45);
-            g.setColour (face);
-            g.fillRoundedRectangle (kb.toFloat().reduced (0.5f, 0.5f), 2.0f);
-            g.setColour (isHeld || pulsing ? border : borderSubtle);
-            g.drawRoundedRectangle (kb.toFloat().reduced (0.5f), 2.0f, 1.0f);
-            if (note % 12 == 0)
-            {
-                g.setColour (isHeld || pulsing ? background : textMuted);
-                g.setFont (typography::valueText());
-                g.drawText ("C" + juce::String (note / 12), kb.removeFromBottom (14),
-                            juce::Justification::centred);
-            }
-        }
+    }
+    for (int note = firstVisibleNote(); note <= lastVisibleNote(); ++note)
+    {
+        if (!isBlack (note)) continue;
+        const auto kb = keyBounds (note);
+        if (kb.isEmpty()) continue;
+        g.setColour (faceFor (note, true));
+        g.fillRoundedRectangle (kb.toFloat(), 2.0f);
+        g.setColour (border);
+        g.drawRoundedRectangle (kb.toFloat().reduced (0.5f), 2.0f, 1.0f);
     }
 
-    // Keyboard-focus cursor outline.
-    const auto cursor = keyBounds (cursorNote_);
-    if (cursor.isEmpty() && hasKeyboardFocus (true))
+    // Keyboard-focus cursor outline (always drawn last, over the keys).
+    if (hasKeyboardFocus (true))
     {
-        // Cursor outside the visible range: no outline until shifted back.
-    }
-    else if (hasKeyboardFocus (true))
-    {
-        g.setColour (accent);
-        g.drawRect (cursor.expanded (1), 2);
+        const auto cursor = keyBounds (cursorNote_);
+        if (!cursor.isEmpty())
+        {
+            g.setColour (accent);
+            g.drawRect (cursor.expanded (1), 2);
+        }
     }
 }
 
@@ -401,15 +437,12 @@ void VoxKeyboard::timerCallback()
         if (until > now) { any = true; break; }
     // Space/Enter press is released when the host key comes back up (JUCE
     // delivers no keyUp event, so the held state is polled while focused).
+    // The release targets the captured key id, not the current cursor.
     if (cursorHeld_ && !juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::spaceKey) &&
         !juce::KeyPress::isKeyCurrentlyDown (juce::KeyPress::returnKey))
     {
         cursorHeld_ = false;
-        if (dragNote_ == cursorNote_)
-        {
-            releaseNote (cursorNote_);
-            dragNote_ = -1;
-        }
+        releaseCapture (spaceNote_);
         repaint();
     }
     if (any) repaint();

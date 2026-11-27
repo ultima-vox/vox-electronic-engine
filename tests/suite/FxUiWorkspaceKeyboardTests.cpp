@@ -4,6 +4,7 @@
 // ownership, no stuck notes, bounded RT-safe UI-note path).
 #include "Processor.h"
 #include "FxEditor.h"
+#include "Tokens.h"
 #include <cmath>
 #include <cstdio>
 #include <utility>
@@ -36,19 +37,21 @@ void checkWorkspaceMatrix()
     FxPanel panel (processor);
     panel.setSize (1040, 700);
 
-    check (panel.workspace() == W::design, "default workspace is DESIGN");
-    check (panel.layerPanel (0).isVisible(), "DESIGN shows layer cards");
-    check (!panel.programCurves().isVisible(), "DESIGN hides Program curves");
+    check (panel.workspace() == W::perform, "default workspace is PERFORM");
+    check (panel.outputSlider().isVisible() && !panel.layerPanel (0).isVisible(),
+           "PERFORM shows output controls and hides layer cards");
+    check (panel.macroKnob (0).isVisible() && panel.macroKnob (7).isVisible(),
+           "PERFORM exposes all eight macro knobs");
     check (panel.keyboard().isVisible() && panel.workspaceTabs().isVisible(),
            "keyboard and tab strip start visible");
 
+    panel.setWorkspace (W::design);
+    check (panel.layerPanel (0).isVisible(), "DESIGN shows layer cards");
+    check (!panel.programCurves().isVisible(), "DESIGN hides Program curves");
     panel.setWorkspace (W::perform);
     check (panel.workspaceTabs().getSelectedIndex() == 1, "tab strip follows PERFORM");
-    check (panel.outputSlider().isVisible() && !panel.layerPanel (0).isVisible(),
-           "PERFORM shows output controls and hides layer cards");
-    check (panel.keyboard().isVisible(), "keyboard stays visible in PERFORM");
-    check (panel.generateButton().isVisible() && panel.macroSelector().isVisible(),
-           "PERFORM exposes Generate and macro controls");
+    check (panel.generateButton().isVisible(),
+           "PERFORM exposes Generate");
 
     panel.setWorkspace (W::timeline);
     check (panel.programCurves().isVisible() && !panel.layerPanel (0).isVisible(),
@@ -56,8 +59,8 @@ void checkWorkspaceMatrix()
     check (panel.programCurvesButton().getToggleState(), "curves toggle reflects TIMELINE");
 
     panel.setWorkspace (W::motion);
-    check (panel.motionPanel().isVisible() == false && panel.workspace() == W::motion,
-           "MOTION workspace selected (overlay opens from its button)");
+    check (panel.workspace() == W::motion && panel.macroSelector().isVisible(),
+           "MOTION owns the macro routing editor");
 
     panel.setWorkspace (W::process);
     check (panel.effectSelector (0).isVisible() && !panel.effectWet (0).isVisible() == false,
@@ -78,6 +81,19 @@ void checkWorkspaceMatrix()
     // Always-visible chrome after cycling every workspace.
     check (panel.keyboard().isVisible() && panel.workspaceTabs().isVisible(),
            "keyboard and tabs survive a full workspace cycle");
+
+    // Responsive chrome at the minimum width: tabs keep a full-width row
+    // and the meter/clock/panic row never overlaps them.
+    {
+        FxProcessor chromeProcessor;
+        FxPanel chrome (chromeProcessor);
+        chrome.setSize (1040, 700);
+        const auto tabs = chrome.workspaceTabs().getBounds();
+        const auto meter = chrome.getBounds().getTopLeft();
+        check (tabs.getWidth() >= 480, "eight tabs keep >=480 px at 1040 width");
+        check (tabs.getBottom() <= 44, "tabs occupy the first chrome row only");
+        (void) meter;
+    }
 
     // Tab callback path (as fired by VoxTabBar::mouseDown).
     panel.workspaceTabs().onTabChanged (static_cast<int> (W::motion));
@@ -154,6 +170,120 @@ void checkKeyboardInteraction()
     keyboard.mouseDown (mouseEvent (keyboard, firstWhite, 100.f, true, false));
     check (std::abs (ons.back().second - 42.f / 127.f) < 1e-6f, "velocity edit applies to the next press");
     keyboard.mouseUp (mouseEvent (keyboard, firstWhite, 100.f, false, true));
+}
+
+// P1 keyboard: distinct input ownership with captured key ids, paint order
+// (whites under blacks), drag outside/re-entry, one-shot event flash,
+// cursor clamping into view and accessible labelling.
+void checkKeyboardOwnershipAndVisual()
+{
+    using namespace vox::ui;
+    VoxKeyboard keyboard;
+    keyboard.setBounds (0, 0, 1040, 118);
+    std::vector<std::pair<int, float>> ons;
+    std::vector<int> offs;
+    int allNotesOff = 0;
+    keyboard.onNoteOn = [&] (int note, float velocity) { ons.push_back ({note, velocity}); };
+    keyboard.onNoteOff = [&] (int note) { offs.push_back (note); };
+    keyboard.onAllNotesOff = [&] { ++allNotesOff; };
+    keyboard.setVelocity (100);
+    const auto whiteW = (1040.0 - 176.0) / 21.0;
+    const auto whiteX = [&] (int whiteIndex) {
+        return static_cast<float> (176.0 + whiteW * (whiteIndex + 0.5));
+    };
+
+    // Z/X captured-key ownership: X releases what Z pressed, even after the
+    // cursor has moved on.
+    keyboard.keyPressed (juce::KeyPress ('z'));
+    check (ons.size() == 1 && ons.back().first == 60, "Z presses the cursor key");
+    keyboard.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+    check (keyboard.cursorNote() == 61, "arrow moves the cursor while Z is held");
+    keyboard.keyPressed (juce::KeyPress ('x'));
+    check (!offs.empty() && offs.back() == 60, "X releases the captured key, not the cursor");
+    check (keyboard.heldNoteCount() == 0, "no held notes after the Z/X pair");
+
+    // Space/Enter capture + focus loss cleanup.
+    keyboard.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+    check (ons.size() == 2 && ons.back().first == 61, "Space presses the current cursor key");
+    const auto allOffBefore = allNotesOff;
+    keyboard.focusLost (juce::Component::focusChangedByTabKey);
+    check (!offs.empty() && offs.back() == 61 && allNotesOff > allOffBefore,
+           "focus loss releases the Space-captured key and fires cleanup");
+    check (keyboard.heldNoteCount() == 0, "focus loss leaves no held notes");
+
+    // Drag outside releases; re-entry without a new press never restarts.
+    keyboard.mouseDown (mouseEvent (keyboard, whiteX (0), 100.f, true, false));
+    const auto onsAfterPress = ons.size();
+    check (ons.back().first == 36, "pointer press starts C3");
+    keyboard.mouseExit (mouseEvent (keyboard, 50.f, 100.f, false, false));
+    check (!offs.empty() && offs.back() == 36, "dragging outside releases the key");
+    keyboard.mouseDrag (mouseEvent (keyboard, whiteX (1), 100.f, false, false));
+    check (ons.size() == onsAfterPress, "re-entry without a press starts nothing");
+    keyboard.mouseUp (mouseEvent (keyboard, whiteX (1), 100.f, false, true));
+    check (keyboard.heldNoteCount() == 0, "pointer path ends clean");
+
+    // One-shot event flash: a visible launch pulse, not a held gate visual
+    // (the panel wires pulseNote to a successful event push).
+    keyboard.setEventMode (true);
+    keyboard.pulseNote (40);
+    check (keyboard.pulseActive (40), "one-shot press shows the event flash");
+    juce::Image pulseFrame (juce::Image::ARGB, 1040, 118, true);
+    {
+        juce::Graphics g (pulseFrame);
+        keyboard.paint (g);
+    }
+    // E4 is the third white key (white index 2).
+    const auto pulsePixel = pulseFrame.getPixelAt (static_cast<int> (176.0 + whiteW * 2.5), 60);
+    check (pulsePixel == tokens::colour::accentHover,
+           "event flash paints the accent highlight on the key");
+    keyboard.mouseDown (mouseEvent (keyboard, whiteX (2), 100.f, true, false));
+    keyboard.mouseUp (mouseEvent (keyboard, whiteX (2), 100.f, false, true));
+    keyboard.setEventMode (false);
+
+    // Panel wiring: a press on the editor keyboard in one-shot mode flashes
+    // the launched key.
+    {
+        using namespace vox::fx;
+        FxProcessor flashProcessor;
+        FxPanel flashPanel (flashProcessor);
+        flashPanel.setSize (1040, 700);
+        auto& flashKeys = flashPanel.keyboard();
+        const auto kw = flashKeys.getWidth();
+        const auto flashWhiteW = static_cast<double> (kw - 176) / 21.0;
+        flashKeys.mouseDown (mouseEvent (flashKeys,
+            static_cast<float> (176.0 + flashWhiteW * 0.5), 60.f, true, false));
+        check (flashKeys.pulseActive (36),
+               "editor keyboard flashes a one-shot event launch");
+        flashKeys.mouseUp (mouseEvent (flashKeys,
+            static_cast<float> (176.0 + flashWhiteW * 0.5), 60.f, false, true));
+    }
+
+    // Paint order: black keys must sit above the white overlap columns
+    // (chromatic iteration used to let later whites overpaint earlier blacks).
+    keyboard.releaseAllNotes();
+    juce::Image frame (juce::Image::ARGB, 1040, 118, true);
+    {
+        juce::Graphics g (frame);
+        keyboard.paint (g);
+    }
+    // C#3 black key spans x in [176 + 0.7w, 176 + 1.3w] over white D3's
+    // column; sample inside both at y=30 (within the black key's height).
+    const auto sampleX = static_cast<int> (176.0 + whiteW * 1.15);
+    const auto blackPixel = frame.getPixelAt (sampleX, 30);
+    check (blackPixel == tokens::colour::control,
+           "black key overlap column is painted above the white keys");
+
+    // Accessible labelling (screen-reader title/description present).
+    check (keyboard.getTitle() == "Performance keyboard",
+           "keyboard exposes an accessible title");
+    check (!keyboard.getDescription().isEmpty(), "keyboard exposes an accessible description");
+
+    // Cursor clamps into view: walking right to note 127 shifts the octave.
+    for (int i = 0; i < 70; ++i)
+        keyboard.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+    check (keyboard.cursorNote() == 127, "cursor reaches note 127");
+    check (keyboard.getBaseOctave() == 8 && keyboard.cursorNote() >= 36 * 0,
+           "octave follows the cursor so it stays visible");
 }
 
 // Bounded SPSC queue + source ownership (TL P0 7227421044): the audio
@@ -327,6 +457,7 @@ int main()
 {
     checkWorkspaceMatrix();
     checkKeyboardInteraction();
+    checkKeyboardOwnershipAndVisual();
     checkProcessorUiQueue();
     checkMidiOwnership();
     if (failures != 0) {

@@ -1243,12 +1243,24 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         const bool queued=processor_.pushUiNote({1,static_cast<std::uint8_t>(note),
             static_cast<std::uint8_t>(juce::jlimit(1,127,int(std::lround(velocity*127.0f))))});
         // Fail closed: a dropped press must not leave a held visual.
-        if(!queued)keyboard_.releaseAllNotes();};
+        if(!queued)keyboard_.releaseAllNotes();
+        else if(processor_.program().mode==PlayMode::oneShot)keyboard_.pulseNote(note);};
     keyboard_.onNoteOff=[this](int note){
         (void)processor_.pushUiNote({0,static_cast<std::uint8_t>(note),0});};
     keyboard_.onAllNotesOff=[this]{processor_.cancelUiNotes();};
     addAndMakeVisible(keyboard_);
-    setWorkspace(Workspace::design);
+    // Eight visible macro knobs bound to the real host macro parameters.
+    for(std::size_t i=0;i<macroKnobs_.size();++i){
+        const auto name=juce::String("MACRO ")+juce::String(static_cast<int>(i+1));
+        macroKnobs_[i].setLabel(name);
+        macroKnobs_[i].setTooltip(name+" — host-automatable macro value with automation readback");
+        macroKnobs_[i].getSlider().setTitle(name);
+        macroKnobs_[i].setDoubleClickResetValue(0.5); // host macro default (0..1)
+        macroKnobAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(
+            processor_.macroParameter(i),macroKnobs_[i].getSlider(),nullptr);
+        addAndMakeVisible(macroKnobs_[i]);
+    }
+    setWorkspace(Workspace::perform);
     startTimerHz (25);
 }
 FxPanel::~FxPanel()
@@ -1266,24 +1278,24 @@ void FxPanel::paint (juce::Graphics& g)
     g.fillAll (c::background);
     // Matte work surface behind the central workspace band (TZ 13.1 look).
     auto surface = getLocalBounds().reduced (12, 8);
-    surface.removeFromTop (48);    // top chrome (tabs, meter, clock, panic)
+    surface.removeFromTop (getLocalBounds().getWidth() < 1280 ? 88 : 48); // chrome
     surface.removeFromBottom (118); // persistent keyboard strip
     g.setColour (c::panel);
     g.fillRoundedRectangle (surface.toFloat(), 8.0f);
     g.setColour (c::borderSubtle);
     g.drawRoundedRectangle (surface.toFloat().reduced (0.5f), 8.0f, 1.0f);
     g.setFont (vox::ui::typography::controlLabel());
-    if (workspace_ == Workspace::perform && !macroLabelBounds_.isEmpty()) {
+    if (workspace_ == Workspace::motion && !macroLabelBounds_.isEmpty()) {
         g.setColour (c::textSecondary);
         g.drawText ("SOURCE        TARGET                          VALUE        DEPTH",
                     macroLabelBounds_, juce::Justification::centredLeft);
     }
     if (workspace_ == Workspace::process && !fxLabelBounds_.isEmpty()) {
         g.setColour (c::textSecondary);
+        auto rest = fxLabelBounds_;
         const int labelWidth = fxLabelBounds_.getWidth() / 4;
         for (int i = 0; i < 4; ++i) {
-            auto column = fxLabelBounds_;
-            if (i < 3) column = column.removeFromLeft (labelWidth);
+            auto column = i < 3 ? rest.removeFromLeft (labelWidth) : rest;
             g.drawText ("FX " + juce::String (i + 1) + "            WET       AMOUNT",
                         column.reduced (4, 0), juce::Justification::centredLeft);
         }
@@ -1319,14 +1331,26 @@ void FxPanel::paint (juce::Graphics& g)
 void FxPanel::resized()
 {
     auto bounds = getLocalBounds();
-    // Top chrome: workspace tabs, real peak meter, host clock, panic.
-    auto top = bounds.removeFromTop (48).reduced (16, 6);
-    panic_.setBounds (top.removeFromRight (96).reduced (2, 0));
-    top.removeFromRight (8);
-    clockStatus_.setBounds (top.removeFromRight (170).reduced (4, 0));
-    meterBounds_ = top.removeFromRight (230).reduced (2);
-    top.removeFromRight (8);
-    workspaceTabs_.setBounds (top);
+    // Top chrome: workspace tabs, real peak meter, host clock, panic. Below
+    // 1280 px the tab strip gets its own full-width row so all eight tabs
+    // keep readable targets instead of squeezing under the meter row.
+    if (bounds.getWidth() < 1280) {
+        auto tabsRow = bounds.removeFromTop (44).reduced (16, 6);
+        workspaceTabs_.setBounds (tabsRow);
+        auto metaRow = bounds.removeFromTop (40).reduced (16, 4);
+        panic_.setBounds (metaRow.removeFromRight (96).reduced (2, 0));
+        metaRow.removeFromRight (8);
+        clockStatus_.setBounds (metaRow.removeFromRight (170).reduced (4, 0));
+        meterBounds_ = metaRow.removeFromRight (230).reduced (2);
+    } else {
+        auto top = bounds.removeFromTop (48).reduced (16, 6);
+        panic_.setBounds (top.removeFromRight (96).reduced (2, 0));
+        top.removeFromRight (8);
+        clockStatus_.setBounds (top.removeFromRight (170).reduced (4, 0));
+        meterBounds_ = top.removeFromRight (230).reduced (2);
+        top.removeFromRight (8);
+        workspaceTabs_.setBounds (top);
+    }
     // Persistent native performance keyboard along the bottom (TZ 13.2 /
     // design 5.4): visible in every workspace.
     keyboard_.setBounds (bounds.removeFromBottom (118).reduced (16, 8));
@@ -1374,18 +1398,25 @@ void FxPanel::resized()
         auto auditionRow = central.removeFromTop (34);
         audition_.setBounds (auditionRow.removeFromLeft (170).reduced (2));
         stopAudition_.setBounds (auditionRow.removeFromLeft (110).reduced (2));
-        macroLabelBounds_ = central.removeFromTop (16).reduced (4, 0);
-        auto macro = central.removeFromTop (34);
-        macroSelector_.setBounds (macro.removeFromLeft (74).reduced (2));
-        macroDestination_.setBounds (macro.removeFromLeft (180).reduced (2));
-        macroValue_.setBounds (macro.removeFromLeft (110).reduced (2));
-        macroDepth_.setBounds (macro.reduced (2));
+        auto macroKnobsRow = central.removeFromTop (86);
+        const int knobWidth = macroKnobsRow.getWidth() / static_cast<int> (macroKnobs_.size());
+        for (std::size_t i = 0; i < macroKnobs_.size(); ++i) {
+            auto slot = macroKnobsRow.removeFromLeft (knobWidth);
+            if (i + 1 == macroKnobs_.size()) slot = macroKnobsRow;
+            macroKnobs_[i].setBounds (slot.reduced (3));
+        }
     }
     { auto central = band; // TIMELINE
         programCurves_.setBounds (central.reduced (4));
     }
     { auto central = band; // MOTION
         motionButton_.setBounds (central.removeFromTop (38).removeFromLeft (240).reduced (2));
+        macroLabelBounds_ = central.removeFromTop (16).reduced (4, 0);
+        auto macro = central.removeFromTop (34);
+        macroSelector_.setBounds (macro.removeFromLeft (74).reduced (2));
+        macroDestination_.setBounds (macro.removeFromLeft (180).reduced (2));
+        macroValue_.setBounds (macro.removeFromLeft (110).reduced (2));
+        macroDepth_.setBounds (macro.reduced (2));
     }
     { auto central = band; // PROCESS
         fxLabelBounds_ = central.removeFromTop (16).reduced (4, 0);
@@ -1509,8 +1540,11 @@ void FxPanel::applyWorkspaceVisibility()
     show (seed_, perform); show (generatorSettings_, perform);
     show (generate_, perform); show (mutate_, perform);
     show (audition_, perform); show (stopAudition_, perform);
-    show (macroSelector_, perform); show (macroDestination_, perform);
-    show (macroValue_, perform); show (macroDepth_, perform);
+    for(auto& knob : macroKnobs_) show (knob, perform);
+    // Routing editor (assignment/readback) lives with Motion; the eight
+    // performance knobs stay in PERFORM.
+    show (macroSelector_, motion); show (macroDestination_, motion);
+    show (macroValue_, motion); show (macroDepth_, motion);
     // MOTION / PROCESS / TRIGGER / PRESETS / ADVANCED.
     show (motionButton_, motion);
     for (std::size_t i = 0; i < effectsType_.size(); ++i) {
@@ -1840,6 +1874,7 @@ void FxPanel::timerCallback()
     refreshExportControls();
     if (!isShowing()) return;
     keyboard_.setExternalNotes(processor_.hostNoteMask());
+    keyboard_.setEventMode(processor_.program().mode==PlayMode::oneShot);
     const auto sample=processor_.sampleSnapshot();
     using Status=sample::Controller::Status;
     const char* text=sample.status==Status::builtin?"Built-in":sample.status==Status::loading?"Loading":

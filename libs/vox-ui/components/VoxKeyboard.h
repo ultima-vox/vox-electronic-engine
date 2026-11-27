@@ -16,7 +16,14 @@ namespace vox::ui {
 // External (host) MIDI notes are an indication snapshot only: they are never
 // started or released here. Mouse position is not aftertouch/MPE. Velocity
 // is an explicit fixed audition value set by the product.
-class VoxKeyboard final : public juce::Component, private juce::Timer, private juce::SettableTooltipClient
+//
+// Input ownership is distinct per source: the pointer, Space/Enter and Z/X
+// each capture the key id they started and release only that key, so cursor
+// or octave movement while a key is held can never strand or mis-target a
+// release. In event mode (FX one-shot) a press shows a short "event
+// launched" flash instead of pretending to be a sustained gate.
+class VoxKeyboard final : public juce::Component, private juce::Timer,
+                           private juce::SettableTooltipClient
 {
 public:
     VoxKeyboard();
@@ -43,12 +50,16 @@ public:
     // One-shot "event launched" flash (FX one-shot does not pretend to be a
     // held gate).
     void pulseNote (int note);
+    bool pulseActive (int note) const noexcept;
+    void setEventMode (bool oneShotEventMode) noexcept { eventMode_ = oneShotEventMode; }
+    bool eventMode() const noexcept { return eventMode_; }
 
     // Release every note this control holds (focus loss, editor close,
     // panic). Fires onNoteOff per held note, then onAllNotesOff.
     void releaseAllNotes();
     int heldNoteCount() const noexcept;
     std::vector<int> heldNotes() const;
+    int cursorNote() const noexcept { return cursorNote_; }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -60,8 +71,8 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
 
 private:
-    void timerCallback() override;
     static constexpr int lowNote = 0, highNote = 127;
+    void timerCallback() override;
     int firstVisibleNote() const noexcept;
     int lastVisibleNote() const noexcept;
     // -1 outside the keys; black keys win over white in the same column.
@@ -70,7 +81,9 @@ private:
     juce::Rectangle<int> keysArea() const noexcept;
     void pressNote (int note);
     void releaseNote (int note);
+    void releaseCapture (int& capture);
     void repaintKey (int note);
+    void clampCursorIntoView();
     bool isBlack (int note) const noexcept;
     bool external (int note) const noexcept;
     bool held (int note) const noexcept;
@@ -81,12 +94,14 @@ private:
     int velocity_ = 100;
     int baseOctave_ = 3;       // C3 at the left edge by default
     int visibleOctaves_ = 3;
-    int dragNote_ = -1;        // key currently started by the pointer
-    bool cursorHeld_ = false;  // Space/Enter press state for the cursor key
+    int pointerNote_ = -1;     // key started by the mouse (own ownership)
+    int spaceNote_ = -1;       // key captured by Space/Enter
+    int zNote_ = -1;           // key captured by Z (X releases it)
+    bool cursorHeld_ = false;  // Space/Enter is physically down
     bool velocityDragging_ = false;
+    bool eventMode_ = false;   // one-shot visual policy
     int cursorNote_ = 60;      // keyboard-focus cursor (middle C)
     juce::Rectangle<int> octaveMinusBounds_, octavePlusBounds_, velocityBounds_;
-    juce::Label velocityLabel_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxKeyboard)
 };

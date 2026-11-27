@@ -267,6 +267,8 @@ public:
     Workspace workspace() const noexcept { return workspace_; }
     vox::ui::VoxKeyboard& keyboard() noexcept { return keyboard_; }
     vox::ui::VoxTabBar& workspaceTabs() noexcept { return workspaceTabs_; }
+    // Eight visible, host-automatable macro knobs (TZ 13.2 PERFORM).
+    vox::ui::VoxKnob& macroKnob(std::size_t index) noexcept { return macroKnobs_[index]; }
     juce::Slider& outputSlider() noexcept { return output_.getSlider(); }
     juce::Slider& durationSlider() noexcept { return duration_.getSlider(); }
     juce::ComboBox& comparisonSelector() noexcept { return comparison_; }
@@ -392,6 +394,8 @@ private:
     // Workspace shell: tab strip, section header, persistent keyboard.
     vox::ui::VoxTabBar workspaceTabs_;
     vox::ui::VoxKeyboard keyboard_;
+    std::array<vox::ui::VoxKnob,8> macroKnobs_ {};
+    std::array<std::unique_ptr<juce::SliderParameterAttachment>,8> macroKnobAttachments_;
     vox::ui::VoxSectionHeader workspaceHeader_;
     Workspace workspace_ = Workspace::design;
     bool syncingTabs_ = false;
