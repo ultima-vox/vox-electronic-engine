@@ -14,6 +14,11 @@
 #include "engine/PresetLibrary.h"
 #include "engine/Preview.h"
 
+// String literals in this project are UTF-8; JUCE's String(const char*)
+// treats them as ASCII, so any literal outside 7-bit ASCII goes through
+// juce::String::fromUTF8 (see VOX design typography).
+inline juce::String u8 (const char* text) { return juce::String::fromUTF8 (text); }
+
 namespace vox::fx {
 class FxProcessor;
 
@@ -94,6 +99,7 @@ class MotionPanel final : public juce::Component, private juce::ListBoxModel {
 public:
     explicit MotionPanel(FxProcessor&);
     std::function<void()> onClosed; // invoked when the user closes the editor
+    void setEmbedded(bool embedded) noexcept; // workspace embed: no close chrome
     void paint(juce::Graphics&) override;
     void resized() override;
     void refresh(int row=-1);
@@ -226,7 +232,7 @@ private:
     juce::ComboBox scope_,role_,mode_,editRole_,styleFacet_,moodFacet_,useFacet_,durationFacet_,tonalFacet_;
     juce::ToggleButton onlyFavorites_{"Favorites"},favorite_{"Favorite"};
     juce::Label title_,detail_,status_;
-    juce::TextButton load_{"Load"},play_{"Preview"},stop_{"Stop"},save_{"Save new"},tags_{"Save tags"},remove_{"Delete"},openFile_{"Open file…"},saveFile_{"Save file…"},close_{"Close"};
+    juce::TextButton load_{"Load"},play_{"Preview"},stop_{"Stop"},save_{"Save new"},tags_{"Save tags"},remove_{"Delete"},openFile_{u8("Open file…")},saveFile_{u8("Save file…")},close_{"Close"};
     std::unique_ptr<preview::Job> audition_;
     std::unique_ptr<library::IndexJob> indexJob_;
     juce::String indexStatus_;

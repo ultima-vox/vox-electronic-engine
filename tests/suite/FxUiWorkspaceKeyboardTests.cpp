@@ -27,6 +27,37 @@ juce::MouseEvent mouseEvent (juce::Component& target, float x, float y, bool dow
                              down || up);
 }
 
+// Responsive bounds: no two visible controls of a workspace may overlap
+// (TL 7227421044: bounds/nonoverlap tests at minimum editor width).
+void checkWorkspaceNonOverlap()
+{
+    using namespace vox::fx;
+    FxProcessor processor;
+    FxPanel panel (processor);
+    panel.setSize (1040, 700);
+    panel.setVisible (true);
+    const auto visibleControls = [&] {
+        std::vector<std::pair<juce::Rectangle<int>, const void*>> found;
+        for (auto* child : panel.getChildren())
+            if (child->isVisible() && !child->getBounds().isEmpty())
+                found.push_back ({ child->getBounds(), child });
+        return found;
+    };
+    for (int w = 0; w < vox::fx::FxPanel::workspaceCount; ++w)
+    {
+        panel.setWorkspace (static_cast<W> (w));
+        const auto controls = visibleControls();
+        int overlaps = 0;
+        for (std::size_t i = 0; i < controls.size(); ++i)
+            for (std::size_t j = i + 1; j < controls.size(); ++j)
+                if (controls[i].first.intersects (controls[j].first)) ++overlaps;
+        check (overlaps == 0, "workspace visible controls do not overlap at 1040 px");
+        // Chrome and keyboard must never intrude into the workspace band.
+        check (panel.workspaceTabs().getBottom() <= 44,
+               "tab strip stays in the chrome row");
+    }
+}
+
 // Every workspace shows exactly its own control group; the keyboard, panic,
 // clock, tabs and header stay visible everywhere; tab and toggle contracts
 // stay in sync.
@@ -505,6 +536,7 @@ void checkMidiOwnership()
 
 int main()
 {
+    checkWorkspaceNonOverlap();
     checkWorkspaceMatrix();
     checkKeyboardInteraction();
     checkKeyboardOwnershipAndVisual();

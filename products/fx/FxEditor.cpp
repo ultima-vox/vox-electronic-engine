@@ -44,7 +44,7 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     fullGenerate_.setTooltip("Generate the selected role, replacing only unlocked structural fields. Host automation is not changed.");
     fullMutate_.setTooltip("Deterministically vary the unlocked existing structural values at the current seed.");
     const auto doSound=[this](bool mutation){const bool applied=processor_.generateSound(mutation);
-        graphStatus_.setText(applied?"Sound graph updated · host values unchanged":"No structural change (check locks / seed)",juce::dontSendNotification);};
+        graphStatus_.setText(applied?u8("Sound graph updated · host values unchanged"):"No structural change (check locks / seed)",juce::dontSendNotification);};
     fullGenerate_.onClick=[doSound]{doSound(false);};fullMutate_.onClick=[doSound]{doSound(true);};
     for(auto* c:std::array<juce::Component*,5>{&graphLock_,&lockGroup_,&fullGenerate_,&fullMutate_,&graphStatus_})addAndMakeVisible(*c);
     for(int i=1;i<=4;++i)complexity_.addItem(juce::String(i),i);
@@ -238,12 +238,12 @@ void WavOptionsPanel::resized() {
 }
 namespace {
 constexpr const char* motionSources[]{"LFO 1","LFO 2","Event step","Sample & hold","Event ADSR","Event phase","Velocity","Dry signal follower","Macro 1","Macro 2","Macro 3","Macro 4","Macro 5","Macro 6","Macro 7","Macro 8"};
-constexpr const char* motionDestinations[]{"Master gain","Master balance","Voice pitch (±12 st)","Voice cutoff (±2 oct)","Filter Q (×¼–4)","Grain rate (×½–2)","Layer gain","Layer pan","Stereo width","FX 1 wet","FX 1 amount","FX 2 wet","FX 2 amount","FX 3 wet","FX 3 amount","FX 4 wet","FX 4 amount"};
+const juce::String motionDestinations[]{"Master gain","Master balance",u8("Voice pitch (±12 st)"),u8("Voice cutoff (±2 oct)"),u8("Filter Q (×¼–4)"),u8("Grain rate (×½–2)"),"Layer gain","Layer pan","Stereo width","FX 1 wet","FX 1 amount","FX 2 wet","FX 2 amount","FX 3 wet","FX 3 amount","FX 4 wet","FX 4 amount"};
 static_assert(std::size(motionSources)==static_cast<unsigned>(mod::Source::count));
 static_assert(std::size(motionDestinations)==static_cast<unsigned>(mod::Destination::count));
 }
 MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
-    title_.setText("MOTION — VOICE AND MIX ROUTES",juce::dontSendNotification);
+    title_.setText(u8("MOTION — VOICE AND MIX ROUTES"),juce::dontSendNotification);
     title_.setFont(vox::ui::typography::controlLabel());
     routeHelp_.setText("Depth is signed. Event sources target voices; dry follower targets mix/FX.",juce::dontSendNotification);
     rows_.setRowHeight(25);rows_.setMultipleSelectionEnabled(false);
@@ -268,7 +268,7 @@ MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
         addAndMakeVisible(sync_[i]);addAndMakeVisible(lfoRate_[i]);
     }
     randomRate_.setNumDecimalPlacesToDisplay(4);
-    shapeTitle_.setText("EVENT SHAPE — eight equal phase steps (0–100%)",juce::dontSendNotification);
+    shapeTitle_.setText(u8("EVENT SHAPE — eight equal phase steps (0–100%)"),juce::dontSendNotification);
     for(std::size_t i=0;i<steps_.size();++i){
         auto& step=steps_[i];step.setRange(0,100,.01);step.setTitle("Step "+juce::String(static_cast<int>(i+1)));
         step.setTooltip(step.getTitle());step.setSliderStyle(juce::Slider::LinearVertical);
@@ -293,6 +293,7 @@ MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
     refresh(0);
 }
 int MotionPanel::getNumRows(){return static_cast<int>(shown_.config.count)+(shown_.config.count<64?1:0);}
+void MotionPanel::setEmbedded(bool embedded) noexcept { close_.setVisible(!embedded); }
 void MotionPanel::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool selected){
     namespace c=vox::ui::tokens::colour;
     if(selected)g.fillAll(c::border);
@@ -301,7 +302,7 @@ void MotionPanel::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool se
     juce::String text;
     if(static_cast<unsigned>(row)==shown_.config.count)text="+ Add route";
     else {const auto r=shown_.config.routes[static_cast<unsigned>(row)];
-        text=juce::String(row+1)+". "+motionSources[static_cast<unsigned>(r.source)]+" → "+motionDestinations[static_cast<unsigned>(r.destination)]+
+        text=juce::String(row+1)+". "+motionSources[static_cast<unsigned>(r.source)]+u8(" → ")+motionDestinations[static_cast<unsigned>(r.destination)]+
             "   "+juce::String(r.depth*100,1)+"% / "+juce::String(r.smoothingSeconds*1000,0)+" ms";}
     g.drawFittedText(text,8,0,w-16,h,juce::Justification::centredLeft,1);
 }
@@ -607,17 +608,17 @@ void SourcePanel::paint(juce::Graphics& g){
     g.fillAll(c::panelRaised);g.setColour(c::border);g.drawRect(getLocalBounds());
     g.setColour(c::text);g.setFont(vox::ui::typography::controlLabel());
     auto a=getLocalBounds().reduced(14);
-    g.drawText("SOURCE / KEY    •    Applies to new events",a.removeFromTop(21),juce::Justification::centredLeft);
+    g.drawText(u8("SOURCE / KEY    •    Applies to new events"),a.removeFromTop(21),juce::Justification::centredLeft);
     a.removeFromTop(72);
     g.drawText("FILTER     TYPE                     SLOPE                   CUTOFF                                           RESONANCE",a.removeFromTop(20),juce::Justification::centredLeft);
     g.drawText("A",a.removeFromTop(31),juce::Justification::centredLeft);
     g.drawText("B",a.removeFromTop(31),juce::Justification::centredLeft);
     const auto labels=a.removeFromTop(22);
-    const auto label=[&](const char* text,const juce::Component& child){
+    const auto label=[&](const juce::String& text,const juce::Component& child){
         g.drawText(text,labels.withX(child.getX()).withWidth(getWidth()-child.getX()),juce::Justification::centredLeft);
     };
     if(sliceGrid_.isVisible()){
-        label("Slice grid",sliceGrid_);label("Read",sliceRead_);label("Repeat gates 1–4",sliceGate_[0]);
+        label("Slice grid",sliceGrid_);label("Read",sliceRead_);label(u8("Repeat gates 1–4"),sliceGate_[0]);
     }else if(grainLength_.isVisible()){
         label("Grain length",grainLength_);label("Start",grainPosition_);label("Travel",grainTravel_);
     }
@@ -663,9 +664,9 @@ juce::String presetKey(source::Tonality key,bool pitched){
 }
 }
 PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(processor),root_(std::move(root)){
-    title_.setText("PRESETS — REVIEW CATALOG / USER LIBRARY",juce::dontSendNotification);
+    title_.setText(u8("PRESETS — REVIEW CATALOG / USER LIBRARY"),juce::dontSendNotification);
     title_.setFont(vox::ui::typography::controlLabel());
-    search_.setTitle("Search name, role, style, mood, use case or mode");search_.setTextToShowWhenEmpty("Search words…",juce::Colours::grey);
+    search_.setTitle("Search name, role, style, mood, use case or mode");search_.setTextToShowWhenEmpty(u8("Search words…"),juce::Colours::grey);
     scope_.addItem("All",1);scope_.addItem("Review only",2);scope_.addItem("User only",3);scope_.setSelectedId(1,juce::dontSendNotification);
     role_.addItem("All roles",1);editRole_.setTitle("User preset role");
     for(int i=0;i<9;++i){role_.addItem(browserRoles[i],i+2);editRole_.addItem(browserRoles[i],i+1);}
@@ -677,9 +678,9 @@ PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(
     constexpr const char* facets[]{"All styles","All moods","All uses"};
     std::array facetsControls{&styleFacet_,&moodFacet_,&useFacet_};
     for(std::size_t i=0;i<facetsControls.size();++i){facetsControls[i]->setTitle(facets[i]);facetsControls[i]->onChange=[this]{filter();};}
-    const auto fillFacet=[this](juce::ComboBox& c,std::initializer_list<const char*> choices){
-        int id=1;for(auto* label:choices)c.addItem(label,id++);c.setSelectedId(1,juce::dontSendNotification);c.onChange=[this]{filter();};};
-    fillFacet(durationFacet_,{"All durations","Short ≤1 s","Long >1 s","Bars / Sequence","Host duration"});
+    const auto fillFacet=[this](juce::ComboBox& c,std::initializer_list<juce::String> choices){
+        int id=1;for(const auto& label:choices)c.addItem(label,id++);c.setSelectedId(1,juce::dontSendNotification);c.onChange=[this]{filter();};};
+    fillFacet(durationFacet_,{"All durations",u8("Short ≤1 s"),"Long >1 s","Bars / Sequence","Host duration"});
     fillFacet(tonalFacet_,{"All tonality","Pitch-responsive","Noise only"});
     durationFacet_.setTitle("Filter by duration");tonalFacet_.setTitle("Filter by pitch classification");
     rows_.setRowHeight(28);rows_.setMultipleSelectionEnabled(false);
@@ -713,13 +714,13 @@ void PresetBrowser::scan(){
         const auto seconds=bars?0.f:e.seconds;
         const auto key=presetKey(authored.program.tonality,e.pitchedSource);
         portable::Tags tags{std::string(e.name),std::string(e.style),std::string(e.mood),std::string(content::useCase(e)),static_cast<unsigned>(e.role),false};
-        auto notes=juce::String(browserModes[static_cast<unsigned>(e.mode)])+"  •  "+juce::String(e.bpm,0)+" BPM  •  "+
+        auto notes=juce::String(browserModes[static_cast<unsigned>(e.mode)])+u8("  •  ")+juce::String(e.bpm,0)+u8(" BPM  •  ")+
             (bars?juce::String(bars)+" bars":juce::String(seconds,2)+" s")+"\n"+
-            key+"  •  Built-in assets  •  Review only\n"+juce::String(tags.use);
+            key+u8("  •  Built-in assets  •  Review only\n")+juce::String(tags.use);
         auto searchable=lowerQuery(tags,e.mode)+" "+key.toLowerCase();
         all_.push_back({std::move(tags),e.mode,static_cast<int>(i),{},std::move(notes),bars,seconds,e.pitchedSource,key,std::move(searchable)});
     }
-    indexStatus_="Scanning user presets…";
+    indexStatus_=u8("Scanning user presets…");
     try{indexJob_=std::make_unique<library::IndexJob>(root_);startTimerHz(20);}
     catch(...){indexStatus_="Could not start user scan";}
     rebuild();
@@ -727,8 +728,8 @@ void PresetBrowser::scan(){
 void PresetBrowser::upsert(const library::IndexEntry& entry){
     const auto key=presetKey(entry.key,entry.pitched);
     const auto length=entry.bars?juce::String(entry.bars)+" bars":juce::String("Host duration");
-    const auto details=juce::String(browserModes[static_cast<unsigned>(entry.mode)])+"  •  "+length+"  •  "+key+"\n"+
-        (entry.asset==sample::Reference::Kind::builtin?"Built-in source":entry.asset==sample::Reference::Kind::pending?"Unverified sample — reimport WAV":"External WAV · SHA verified on Preview/Load");
+    const auto details=juce::String(browserModes[static_cast<unsigned>(entry.mode)])+u8("  •  ")+length+u8("  •  ")+key+"\n"+
+        (entry.asset==sample::Reference::Kind::builtin?"Built-in source":entry.asset==sample::Reference::Kind::pending?u8("Unverified sample — reimport WAV"):u8("External WAV · SHA verified on Preview/Load"));
     auto searchable=lowerQuery(entry.tags,entry.mode)+" "+key.toLowerCase();
     Row row{entry.tags,entry.mode,-1,entry.file,details,entry.bars,0,entry.pitched,key,std::move(searchable)};
     const auto at=std::find_if(all_.begin(),all_.end(),[&](const Row& r){return r.factory<0&&r.file==entry.file;});
@@ -780,15 +781,15 @@ void PresetBrowser::filter(){
     const auto previous=rows_.getSelectedRow();
     if(select<0)rows_.deselectAllRows();else rows_.selectRow(select);
     if(previous==select)selectedRowsChanged(select);
-    report(juce::String(static_cast<int>(visible_.size()))+" shown"+(indexStatus_.isEmpty()?"":" · "+indexStatus_));
+    report(juce::String(static_cast<int>(visible_.size()))+" shown"+(indexStatus_.isEmpty()?"":u8(" · ")+indexStatus_));
 }
 void PresetBrowser::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool selectedRow){
     if(row<0||static_cast<std::size_t>(row)>=visible_.size())return;
     const auto& item=all_[visible_[static_cast<std::size_t>(row)]];
     namespace c=vox::ui::tokens::colour;
     if(selectedRow)g.fillAll(c::border);g.setColour(c::text);g.setFont(juce::FontOptions(13.f));
-    const auto line=juce::String(item.factory>=0?"REVIEW  ":"USER  ")+juce::String(item.tags.name)+"  ·  "+browserRoles[item.tags.role]+
-        (item.tags.style.empty()?"":"  ·  "+juce::String(item.tags.style))+(item.tags.favorite?"  ★":"");
+    const auto line=juce::String(item.factory>=0?"REVIEW  ":"USER  ")+juce::String(item.tags.name)+u8("  ·  ")+browserRoles[item.tags.role]+
+        (item.tags.style.empty()?"":u8("  ·  ")+juce::String(item.tags.style))+(item.tags.favorite?u8("  ★"):"");
     g.drawFittedText(line,8,0,w-16,h,juce::Justification::centredLeft,1);
 }
 void PresetBrowser::selectedRowsChanged(int){
@@ -812,7 +813,7 @@ void PresetBrowser::load(){
     stopPreview();portable::Sound sound;
     const bool ok=row->factory>=0?processor_.loadReviewCandidate(static_cast<std::size_t>(row->factory)):
         library::read(row->file,sound)&&processor_.applyPortableSound(sound);
-    report(ok?"Loaded structure · host values unchanged":"Preset is unavailable or invalid");
+    report(ok?u8("Loaded structure · host values unchanged"):"Preset is unavailable or invalid");
 }
 void PresetBrowser::save(bool tagsOnly){
     if(indexJob_)return;
@@ -847,7 +848,7 @@ void PresetBrowser::runPreview(){
     if(row->factory>=0)capture=content::makePreview(content::reviewEntries[static_cast<std::size_t>(row->factory)],preview::Job::rate);
     else {portable::Sound sound;if(!library::read(row->file,sound)){report("User preset unavailable");return;}
         capture=processor_.capturePresetPreview(sound);reference=std::move(sound.sample);}
-    try{audition_=std::make_unique<preview::Job>(std::move(capture),std::move(reference));armed_=true;startTimerHz(20);report("Rendering preview…");}
+    try{audition_=std::make_unique<preview::Job>(std::move(capture),std::move(reference));armed_=true;startTimerHz(20);report(u8("Rendering preview…"));}
     catch(...){report("Could not start preview worker");}
 }
 void PresetBrowser::stopPreview(){armed_=false;if(audition_)audition_->cancel();processor_.previewBus().stop();}
@@ -857,14 +858,14 @@ void PresetBrowser::pollBackground(){
         auto result=indexJob_->take();indexJob_.reset();
         for(const auto& item:result.entries)upsert(item);
         indexStatus_=result.unavailable?"User library unavailable":juce::String{};
-        if(result.invalid)indexStatus_+=(indexStatus_.isEmpty()?"":" · ")+juce::String(result.invalid)+" invalid user presets skipped";
-        if(result.limited)indexStatus_+=(indexStatus_.isEmpty()?"":" · ")+juce::String("User scan limited to 512 files");
+        if(result.invalid)indexStatus_+=(indexStatus_.isEmpty()?"":u8(" · "))+juce::String(result.invalid)+" invalid user presets skipped";
+        if(result.limited)indexStatus_+=(indexStatus_.isEmpty()?"":u8(" · "))+juce::String("User scan limited to 512 files");
         visible_.clear();rebuild();
     }
     if(audition_){const auto result=audition_->result();if(result==preview::Result::loading)return;
         const bool started=armed_&&result==preview::Result::ready&&audition_->publish(processor_.previewBus(),previewTicket_);
         if(armed_&&previewTicket_!=processor_.previewBus().ticket())report("Preview cancelled by restore, panic or offline processing");
-        else if(armed_)report(started?"Preview ready · host audio must be running":"Preview unavailable (asset, empty schedule or audio bounds)");
+        else if(armed_)report(started?u8("Preview ready · host audio must be running"):"Preview unavailable (asset, empty schedule or audio bounds)");
         audition_.reset();armed_=false;
         if(!started){if(!indexJob_)stopTimer();return;}
     }
@@ -1070,7 +1071,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     dragGrip_.setDescription(dragGrip_.getTooltip());
     dragGrip_.begin=[this]{beginFileDrag();};
     addAndMakeVisible(dragGrip_);
-    dragWarning_.setText("Copy into project · Save for a lasting file",juce::dontSendNotification);
+    dragWarning_.setText(u8("Copy into project · Save for a lasting file"),juce::dontSendNotification);
     dragWarning_.setJustificationType(juce::Justification::centredRight);
     dragWarning_.setFont(juce::FontOptions(12.0f));
     dragWarning_.setTooltip("Temporary files may expire. Availability is checked when dragging; the OS may still read later after that check. Copy imports into the project; handed-off files are retained even after canceled drops.");
@@ -1143,6 +1144,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     motionPanel_.onClosed=[this]{ setWorkspace(Workspace::perform); };
     browser_.onClosed=[this]{ setWorkspace(Workspace::perform); };
     browser_.setEmbedded(true);
+    motionPanel_.setEmbedded(true);
     addAndMakeVisible(sourceButton_);
     addChildComponent(browser_);
     presets_.setTooltip("Browse the immutable review catalog and your tagged user presets");
@@ -1183,7 +1185,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     };
     patternEnabled_.setClickingTogglesState(true);
     patternEnabled_.setTitle("Enable host-synchronized trigger pattern");
-    patternEnabled_.setTooltip("Requires a playing 4/4 host with PPQ and 10–1000 BPM; oversized blocks are rejected to bound callback work");
+    patternEnabled_.setTooltip(u8("Requires a playing 4/4 host with PPQ and 10–1000 BPM; oversized blocks are rejected to bound callback work"));
     patternAttachment_=std::make_unique<juce::ButtonParameterAttachment>(processor_.patternEnabledParameter(),patternEnabled_);
     addAndMakeVisible(patternSelector_);addAndMakeVisible(patternEnabled_);
     for(int i=1;i<=4;++i){patternLength_.addItem(juce::String(i)+" bars",i);patternBar_.addItem("Bar "+juce::String(i),i);}
@@ -1244,7 +1246,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         addAndMakeVisible(step);
     }
     patternActions_.setTitle("Pattern clipboard, selected bar variations, undo and redo");
-    patternActions_.setTooltip("Copy the whole Pattern or the selected bar. Bar copy lasts until this editor closes; paste requires the same grid. Shift or reverse the selected bar without changing other bars.");patternActions_.setTextWhenNothingSelected("Edit…");
+    patternActions_.setTooltip("Copy the whole Pattern or the selected bar. Bar copy lasts until this editor closes; paste requires the same grid. Shift or reverse the selected bar without changing other bars.");patternActions_.setTextWhenNothingSelected(u8("Edit…"));
     patternActions_.addItem("Copy Pattern",1);patternActions_.addItem("Paste Pattern",2);
     patternActions_.addItem("Copy selected bar",5);patternActions_.addItem("Paste into selected bar",6);
     patternActions_.addSeparator();
@@ -1284,7 +1286,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     for(std::size_t i=0;i<macroKnobs_.size();++i){
         const auto name=juce::String("MACRO ")+juce::String(static_cast<int>(i+1));
         macroKnobs_[i].setLabel(name);
-        macroKnobs_[i].setTooltip(name+" — host-automatable macro value with automation readback");
+        macroKnobs_[i].setTooltip(name+u8(" — host-automatable macro value with automation readback"));
         macroKnobs_[i].getSlider().setTitle(name);
         macroKnobs_[i].setDoubleClickResetValue(0.5); // host macro default (0..1)
         macroKnobAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(
@@ -1342,22 +1344,24 @@ void FxPanel::paint (juce::Graphics& g)
     auto titleRow = text.removeFromTop (12);
     g.drawText (clipHold_ ? "STEREO PEAK  /  CLIP" : "STEREO PEAK", titleRow,
                 juce::Justification::centredLeft);
+    // Telemetry shares the title row so the meter stays readable even in the
+    // compact chrome (the tracks fill the rest of the meter height).
+    g.setColour (c::textMuted);
+    g.drawText ("EV " + juce::String (shownEvents_) + "/8+4  GR " + juce::String (shownGrains_) +
+                    "/64  DROP " + juce::String (static_cast<juce::int64> (shownDropped_)),
+                titleRow, juce::Justification::centredRight);
+    const auto trackHeight = juce::jlimit (4, 10, text.getHeight() / static_cast<int> (shownPeaks_.size()) - 3);
     for (std::size_t ch = 0; ch < shownPeaks_.size(); ++ch) {
-        auto row = text.removeFromTop (9);
+        auto row = text.removeFromTop (trackHeight);
         g.setColour (c::text);
         g.drawText (ch == 0 ? "L" : "R", row.removeFromLeft (12), juce::Justification::centredLeft);
         const auto db = juce::Decibels::gainToDecibels (shownPeaks_[ch], -60.f);
-        auto track = row.reduced (0, 2).toFloat();
+        auto track = row.reduced (0, 1).toFloat();
         g.setColour (c::panel);
         g.fillRoundedRectangle (track, 2.f);
         g.setColour (clipHold_ ? c::danger : c::accent);
         g.fillRoundedRectangle (track.withWidth (track.getWidth() * juce::jlimit (0.f, 1.f, (db + 60.f) / 60.f)), 2.f);
     }
-    g.setColour (c::textMuted);
-    g.setFont (vox::ui::typography::valueText());
-    g.drawText ("EV " + juce::String (shownEvents_) + "/8+4  GR " + juce::String (shownGrains_) +
-                    "/64  DROP " + juce::String (static_cast<juce::int64> (shownDropped_)),
-                text, juce::Justification::centredLeft);
 }
 void FxPanel::resized()
 {
@@ -1432,8 +1436,9 @@ void FxPanel::resized()
         auto macroKnobsRow = central.removeFromTop (86);
         const int knobWidth = macroKnobsRow.getWidth() / static_cast<int> (macroKnobs_.size());
         for (std::size_t i = 0; i < macroKnobs_.size(); ++i) {
-            auto slot = macroKnobsRow.removeFromLeft (knobWidth);
-            if (i + 1 == macroKnobs_.size()) slot = macroKnobsRow;
+            auto slot = i + 1 == macroKnobs_.size()
+                            ? macroKnobsRow
+                            : macroKnobsRow.removeFromLeft (knobWidth);
             macroKnobs_[i].setBounds (slot.reduced (3));
         }
     }
@@ -1441,13 +1446,14 @@ void FxPanel::resized()
         programCurves_.setBounds (central.reduced (4));
     }
     { auto central = band; // MOTION
-        motionPanel_.setBounds (central.reduced (4));
         macroLabelBounds_ = central.removeFromTop (16).reduced (4, 0);
         auto macro = central.removeFromTop (34);
         macroSelector_.setBounds (macro.removeFromLeft (74).reduced (2));
         macroDestination_.setBounds (macro.removeFromLeft (180).reduced (2));
         macroValue_.setBounds (macro.removeFromLeft (110).reduced (2));
         macroDepth_.setBounds (macro.reduced (2));
+        central.removeFromTop (4);
+        motionPanel_.setBounds (central.reduced (4));
     }
     { auto central = band; // PROCESS
         fxLabelBounds_ = central.removeFromTop (16).reduced (4, 0);
@@ -1511,18 +1517,18 @@ void FxPanel::resized()
     wavOptions_.setBounds (getLocalBounds().withSizeKeepingCentre (470, 232));
 }
 namespace {
-const char* workspaceTitle (FxPanel::Workspace workspace) noexcept
+juce::String workspaceTitle (FxPanel::Workspace workspace)
 {
     using W = FxPanel::Workspace;
     switch (workspace) {
-    case W::design:   return "DESIGN  ·  LAYERS A-D";
-    case W::perform:  return "PERFORM  ·  PROGRAM / MODE / MACROS";
-    case W::timeline: return "TIMELINE  ·  20 PROGRAM CURVES";
-    case W::motion:   return "MOTION  ·  LFO / STEP / ADSR / MATRIX";
-    case W::process:  return "PROCESS  ·  FOUR REAL FX SLOTS";
-    case W::trigger:  return "TRIGGER / PATTERN  ·  1-4 BARS";
-    case W::presets:  return "PRESETS  ·  FACTORY / USER / A-B";
-    case W::advanced: return "ADVANCED  ·  SAMPLE / EXPORT / DIAGNOSTICS";
+    case W::design:   return u8("DESIGN  ·  LAYERS A-D");
+    case W::perform:  return u8("PERFORM  ·  PROGRAM / MODE / MACROS");
+    case W::timeline: return u8("TIMELINE  ·  20 PROGRAM CURVES");
+    case W::motion:   return u8("MOTION  ·  LFO / STEP / ADSR / MATRIX");
+    case W::process:  return u8("PROCESS  ·  FOUR REAL FX SLOTS");
+    case W::trigger:  return u8("TRIGGER / PATTERN  ·  1-4 BARS");
+    case W::presets:  return u8("PRESETS  ·  FACTORY / USER / A-B");
+    case W::advanced: return u8("ADVANCED  ·  SAMPLE / EXPORT / DIAGNOSTICS");
     case W::count:    break;
     }
     return "";
@@ -1706,7 +1712,7 @@ void FxPanel::exportPattern(bool drag)
     const auto bpm=processor_.observedTempo();
     if(bpm<10.0||bpm>1000.0) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-            "MIDI export failed","The captured host tempo is outside the supported MIDI export range (10–1000 BPM).");return;
+            "MIDI export failed",u8("The captured host tempo is outside the supported MIDI export range (10–1000 BPM)."));return;
     }
     if(drag){
         if(!processor_.prepareMidiDrag(pattern,bpm))
@@ -1865,23 +1871,23 @@ void FxPanel::refreshExportControls()
     wavExport_.setEnabled(!exportChooserOpen_&&!midiBusy&&!active);
     prepareMidiDrag_.setEnabled(!exportChooserOpen_&&!status&&!active);
     dragGrip_.setEnabled(!exportChooserOpen_&&!status&&ready&&!active);
-    const auto dragLabel=active?"Dragging…":preparing?"Preparing drag…":unavailable?"Snapshot unavailable":ready?
-        (dragFailed_?"Drag failed · retry":dragState==DragState::wav?"Drag WAV snapshot":"Drag MIDI snapshot"):
+    const auto dragLabel=active?u8("Dragging…"):preparing?u8("Preparing drag…"):unavailable?"Snapshot unavailable":ready?
+        (dragFailed_?u8("Drag failed · retry"):dragState==DragState::wav?"Drag WAV snapshot":"Drag MIDI snapshot"):
         "No drag file";
     if(dragGrip_.getButtonText()!=dragLabel)dragGrip_.setButtonText(dragLabel);
     const auto dragHelp=unavailable?
         "The prepared temporary file is missing, incomplete, or unreadable. It is not recreated automatically. Use Prepare MIDI drag or WAV > Prepare drag to explicitly render a replacement; Save remains separate.":
         "Drag a prepared WAV or MIDI snapshot. Copy imports into the DAW project; use Save for a lasting file path.";
     if(dragGrip_.getTooltip()!=dragHelp){dragGrip_.setTooltip(dragHelp);dragGrip_.setDescription(dragHelp);}
-    const auto warning=unavailable?(preparing?"Preparing replacement snapshot…":"Snapshot unavailable · prepare again"):
-        "Copy into project · Save for a lasting file";
+    const auto warning=unavailable?(preparing?u8("Preparing replacement snapshot…"):u8("Snapshot unavailable · prepare again")):
+        u8("Copy into project · Save for a lasting file");
     if(dragWarning_.getText()!=warning)dragWarning_.setText(warning,juce::dontSendNotification);
     const auto warningHelp=unavailable?
         "The temporary drag file is no longer available. VOX FX will not silently recreate it or delete a file already handed to the OS. Prepare a fresh WAV or MIDI snapshot explicitly.":
         "Temporary files may expire. Availability is checked when dragging; the OS may still read later after that check. Copy imports into the project; handed-off files are retained even after canceled drops.";
     if(dragWarning_.getTooltip()!=warningHelp)dragWarning_.setTooltip(warningHelp);
     if(status){
-        const auto label=status->committing?juce::String("Saving…"):status->cancelling?juce::String("Cancelling…"):
+        const auto label=status->committing?juce::String(u8("Saving…")):status->cancelling?juce::String(u8("Cancelling…")):
             wavBusy?juce::String(static_cast<int>(status->progress*100))+"%":juce::String("Cancel");
         (wavBusy?wavExport_:midiExport_).setButtonText(label);
     }
@@ -1924,19 +1930,19 @@ void FxPanel::timerCallback()
     const auto program = processor_.program();
     using Clock=FxProcessor::PatternClock;
     const auto clock=processor_.patternClock();
-    const char* patternLabel="HOST PATTERN";
-    const char* patternHelp="Use host PPQ to play the trigger Pattern. Sequence mode also uses this Pattern.";
+    juce::String patternLabel="HOST PATTERN";
+    juce::String patternHelp="Use host PPQ to play the trigger Pattern. Sequence mode also uses this Pattern.";
     switch(clock){
         case Clock::inactive: break;
         case Clock::ready44: patternHelp="Host Pattern: synchronized in 4/4.";break;
-        case Clock::readyAssumed44: patternLabel="PATTERN · 4/4*";patternHelp="Time signature unavailable. Pattern assumes 4/4 for compatibility.";break;
-        case Clock::noPlayhead: patternLabel="PATTERN · NO CLOCK";patternHelp="The host did not report transport position.";break;
-        case Clock::stopped: patternLabel="PATTERN · STOPPED";patternHelp="Start the host transport to play the Pattern.";break;
-        case Clock::invalidPpq: patternLabel="PATTERN · NO PPQ";patternHelp="Host beat position is missing or outside the supported range.";break;
-        case Clock::invalidTempo: patternLabel="PATTERN · BPM";patternHelp="Host Pattern requires a valid tempo from 10 to 1000 BPM.";break;
-        case Clock::unsupportedMeter: patternLabel="PATTERN · METER";patternHelp="Host Pattern does not play in a reported time signature other than 4/4.";break;
-        case Clock::waitingForState: patternLabel="PATTERN · WAITING";patternHelp="Waiting for the new Program and Pattern state.";break;
-        case Clock::blockRejected: patternLabel="PATTERN · BLOCK";patternHelp="This host block cannot be scheduled within the Pattern work limit.";break;
+        case Clock::readyAssumed44: patternLabel=u8("PATTERN · 4/4*");patternHelp="Time signature unavailable. Pattern assumes 4/4 for compatibility.";break;
+        case Clock::noPlayhead: patternLabel=u8("PATTERN · NO CLOCK");patternHelp="The host did not report transport position.";break;
+        case Clock::stopped: patternLabel=u8("PATTERN · STOPPED");patternHelp="Start the host transport to play the Pattern.";break;
+        case Clock::invalidPpq: patternLabel=u8("PATTERN · NO PPQ");patternHelp="Host beat position is missing or outside the supported range.";break;
+        case Clock::invalidTempo: patternLabel=u8("PATTERN · BPM");patternHelp="Host Pattern requires a valid tempo from 10 to 1000 BPM.";break;
+        case Clock::unsupportedMeter: patternLabel=u8("PATTERN · METER");patternHelp="Host Pattern does not play in a reported time signature other than 4/4.";break;
+        case Clock::waitingForState: patternLabel=u8("PATTERN · WAITING");patternHelp="Waiting for the new Program and Pattern state.";break;
+        case Clock::blockRejected: patternLabel=u8("PATTERN · BLOCK");patternHelp="This host block cannot be scheduled within the Pattern work limit.";break;
     }
     if(patternEnabled_.getButtonText()!=patternLabel)patternEnabled_.setButtonText(patternLabel);
     if(patternEnabled_.getTooltip()!=patternHelp){patternEnabled_.setTooltip(patternHelp);patternEnabled_.setDescription(patternHelp);}

@@ -510,6 +510,12 @@ target_link_libraries(suite_fx_ui_workspace_keyboard_tests PRIVATE ${VOX_SUITE_f
 add_test(NAME suite_fx_ui_workspace_keyboard_tests COMMAND suite_fx_ui_workspace_keyboard_tests)
 set_tests_properties(suite_fx_ui_workspace_keyboard_tests PROPERTIES LABELS suite)
 
+# UI render harness: offscreen PNG evidence matrix; --windowed for the
+# native owner screenshot pass. Not registered as a test.
+add_executable(fx_ui_render_harness FxUiRenderHarness.cpp)
+target_include_directories(fx_ui_render_harness PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/products/fx ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+target_link_libraries(fx_ui_render_harness PRIVATE ${VOX_SUITE_fx_TARGET})
+
 add_executable(suite_fx_pattern_benchmark FxPatternBenchmark.cpp)
 target_include_directories(suite_fx_pattern_benchmark PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_pattern_benchmark COMMAND suite_fx_pattern_benchmark)
