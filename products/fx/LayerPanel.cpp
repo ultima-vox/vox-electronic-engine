@@ -14,6 +14,10 @@ LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor
     solo_.setTooltip("Monitor selected layers together. Does not enable muted layers, change the Program or affect offline export.");
     solo_.onClick=[this]{processor_.toggleLayerSolo(static_cast<std::size_t>(index_));};
     addAndMakeVisible(solo_);
+    editSource_.setTitle("Edit source of layer " + juce::String(index + 1));
+    editSource_.setTooltip("Open the source editor for this layer: scale, pitch, filters and family controls");
+    editSource_.onClick=[this]{ if(onEditSource) onEditSource(); };
+    addAndMakeVisible(editSource_);
     const char* names[]{"Noise Riser", "Downlifter", "Shepard", "Impact", "Whoosh", "Laser", "Squelch", "Metallic", "Texture", "Formant", "Glitch", "Granular"};
     for(int i=0;i<12;++i) family_.addItem(names[i],i+1);
     family_.setTitle("Layer " + juce::String(index + 1) + " family");
@@ -80,6 +84,7 @@ void LayerPanel::resized() {
     auto area=getLocalBounds().reduced(10);
     auto header=area.removeFromTop(25);enabled_.setBounds(header.removeFromRight(48));
     solo_.setBounds(header.removeFromRight(48).reduced(1,0));
+    editSource_.setBounds(header.removeFromRight(62).reduced(1,0));
     area.removeFromTop(4);family_.setBounds(area.removeFromTop(30));area.removeFromTop(8);
     auto knobs=area.removeFromTop(85);const int width=knobs.getWidth()/4;
     gain_.setBounds(knobs.removeFromLeft(width));pan_.setBounds(knobs.removeFromLeft(width));

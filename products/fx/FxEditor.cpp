@@ -112,6 +112,9 @@ void GeneratorPanel::timerCallback() {
         for(std::size_t i=0;i<fieldLocks_.size();++i)fieldLocks_[i].setToggleState((mask&bits[i])!=0,juce::dontSendNotification);}
 }
 ProgramCurvePanel::ProgramCurvePanel(FxProcessor& processor) : editor_(processor, std::nullopt) {
+    // Per-layer trajectory editors complete the 20 timeline targets.
+    for (std::size_t i = 0; i < layerEditors_.size(); ++i)
+        layerEditors_[i] = std::make_unique<CurveEditor>(processor, i);
     const char* names[] { "Amplitude", "Pitch", "Cutoff", "Panorama" };
     for (int i=0; i<4; ++i) selector_.addItem(names[i], i+1);
     selector_.setTitle("Program trajectory");
@@ -119,23 +122,43 @@ ProgramCurvePanel::ProgramCurvePanel(FxProcessor& processor) : editor_(processor
     selector_.onChange = [this] {
         const int index = selector_.getSelectedId() - 1;
         if (index < 0 || index >= 4) return;
-        editor_.setKind(static_cast<CurveKind>(index));
+        activeEditor().setKind(static_cast<CurveKind>(index));
         refreshHint();
     };
+    // 20 timeline targets: 4 trajectory kinds across Program + Layer A..D.
+    scope_.addItem("Program", 1);
+    for (int i = 0; i < 4; ++i)
+        scope_.addItem(juce::String("Layer ") + juce::String::charToString(static_cast<juce::juce_wchar>('A' + i)), i + 2);
+    scope_.setTitle("Timeline target scope");
+    scope_.setSelectedId(1, juce::dontSendNotification);
+    scope_.onChange = [this] { applyScope(); };
+    for (auto& editor : layerEditors_) addChildComponent(*editor);
     undo_.setTitle("Undo curve edit"); redo_.setTitle("Redo curve edit");
     reset_.setTooltip("Restore the selected trajectory to its neutral value; this edit can be undone");
-    undo_.onClick = [this] { (void)editor_.undo(); };
-    redo_.onClick = [this] { (void)editor_.redo(); };
-    reset_.onClick = [this] { (void)editor_.resetCurve(); };
+    undo_.onClick = [this] { (void)activeEditor().undo(); };
+    redo_.onClick = [this] { (void)activeEditor().redo(); };
+    reset_.onClick = [this] { (void)activeEditor().resetCurve(); };
     hint_.setFont(vox::ui::typography::controlLabel());
-    for (auto* child : std::array<juce::Component*,6>{ &selector_, &undo_, &redo_, &reset_, &editor_, &hint_ })
+    for (auto* child : std::array<juce::Component*,7>{ &scope_, &selector_, &undo_, &redo_, &reset_, &editor_, &hint_ })
         addAndMakeVisible(*child);
     refreshHint();
 }
-void ProgramCurvePanel::refresh() { editor_.refresh(); }
+CurveEditor& ProgramCurvePanel::editor() noexcept { return activeEditor(); }
+CurveEditor& ProgramCurvePanel::activeEditor() noexcept {
+    const auto scope = static_cast<std::size_t> (juce::jlimit (0, 4, scope_.getSelectedId() - 1));
+    return scope == 0 ? editor_ : *layerEditors_[scope - 1];
+}
+void ProgramCurvePanel::applyScope() {
+    for (auto& editor : layerEditors_) editor->setVisible (false);
+    editor_.setVisible (scope_.getSelectedId() <= 1);
+    activeEditor().setKind (static_cast<CurveKind> (juce::jlimit (0, 3, selector_.getSelectedId() - 1)));
+    activeEditor().refresh();
+    refreshHint();
+}
+void ProgramCurvePanel::refresh() { activeEditor().refresh(); }
 void ProgramCurvePanel::refreshHint() {
     const char* unit = "Amplitude: 0% to 100%";
-    switch (editor_.kind()) {
+    switch (activeEditor().kind()) {
         case CurveKind::gain: break;
         case CurveKind::pitch: unit = "Pitch: -24 to +24 semitones before layer pitch"; break;
         case CurveKind::cutoff: unit = "Cutoff: below to above the family sweep; center is neutral"; break;
@@ -156,13 +179,15 @@ void ProgramCurvePanel::paint(juce::Graphics& g) {
 void ProgramCurvePanel::resized() {
     auto area = getLocalBounds().reduced(12);
     auto header = area.removeFromTop(28);
-    header.removeFromLeft(270);
+    header.removeFromLeft(160);
+    scope_.setBounds(header.removeFromLeft(110).reduced(2));
     selector_.setBounds(header.removeFromLeft(140).reduced(2));
     undo_.setBounds(header.removeFromLeft(60).reduced(2));
     redo_.setBounds(header.removeFromLeft(60).reduced(2));
     reset_.setBounds(header.removeFromLeft(100).reduced(2));
     hint_.setBounds(area.removeFromBottom(22));
     editor_.setBounds(area);
+    for (auto& editor : layerEditors_) editor->setBounds(area);
 }
 WavOptionsPanel::WavOptionsPanel() {
     rate_.addItem("44.1 kHz",1); rate_.addItem("48 kHz",2); rate_.addItem("96 kHz",3);
@@ -262,7 +287,7 @@ MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
     undoButton_.setTooltip("Undo a committed route, clock or event-shape edit in this editor");
     redoButton_.setTooltip("Redo a committed Motion edit; a new edit clears redo");
     setWantsKeyboardFocus(true);
-    reload_.onClick=[this]{refresh();};close_.onClick=[this]{setVisible(false);};
+    reload_.onClick=[this]{refresh();};close_.onClick=[this]{setVisible(false);if(onClosed)onClosed();};
     const std::array<juce::Component*,17> components{&title_,&routeHelp_,&rows_,&source_,&destination_,&depth_,&smooth_,&randomRate_,&randomSeed_,&status_,&apply_,&remove_,&clock_,&reload_,&close_,&undoButton_,&redoButton_};
     for(auto* c:components)addAndMakeVisible(*c);
     refresh(0);
@@ -666,13 +691,14 @@ PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(
     load_.onClick=[this]{load();};play_.onClick=[this]{runPreview();};stop_.onClick=[this]{stopPreview();report("Preview stopped");};
     save_.onClick=[this]{save(false);};tags_.onClick=[this]{save(true);};remove_.onClick=[this]{erase();};
     openFile_.onClick=[this]{stopPreview();if(looseFile)looseFile(false);};saveFile_.onClick=[this]{if(looseFile)looseFile(true);};
-    close_.onClick=[this]{stopPreview();setVisible(false);};
+    close_.onClick=[this]{stopPreview();setVisible(false);if(onClosed)onClosed();};
     const std::array<juce::Component*,28> controls{&rows_,&search_,&name_,&style_,&mood_,&use_,&scope_,&role_,&mode_,&editRole_,&onlyFavorites_,&favorite_,&title_,&detail_,&status_,&load_,&play_,&stop_,&save_,&tags_,&remove_,&openFile_,&saveFile_,
         &styleFacet_,&moodFacet_,&useFacet_,&durationFacet_,&tonalFacet_};
     for(auto* c:controls)addAndMakeVisible(*c);addAndMakeVisible(close_);
 }
 PresetBrowser::~PresetBrowser(){stopTimer();stopPreview();}
 void PresetBrowser::open(){scan();setVisible(true);toFront(true);}
+void PresetBrowser::setEmbedded(bool embedded){close_.setVisible(!embedded);}
 int PresetBrowser::getNumRows(){return static_cast<int>(visible_.size());}
 const PresetBrowser::Row* PresetBrowser::selected() const noexcept{
     const auto index=rows_.getSelectedRow();return index>=0&&static_cast<std::size_t>(index)<visible_.size()?&all_[visible_[static_cast<std::size_t>(index)]]:nullptr;
@@ -1095,6 +1121,11 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     for (int i=0; i<4; ++i) {
         layers_[static_cast<std::size_t>(i)] = std::make_unique<LayerPanel>(processor_,i);
         addAndMakeVisible(*layers_[static_cast<std::size_t>(i)]);
+        const auto layerIndex=static_cast<std::size_t>(i);
+        layers_[layerIndex]->onEditSource=[this,layerIndex]{
+            sourcePanel_.layerSelector().setSelectedId(static_cast<int>(layerIndex)+1,juce::sendNotificationSync);
+            sourcePanel_.open(*this);
+        };
     }
     addChildComponent(programCurves_);
     programCurvesButton_.setClickingTogglesState(true);
@@ -1109,9 +1140,9 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     sourceButton_.setTooltip("Edit Program key, per-layer pitch and filters, and Glitch or Granular source controls");
     sourceButton_.onClick=[this]{sourcePanel_.open(sourceButton_);};
     addChildComponent(motionPanel_);
-    motionButton_.setTooltip("Open the native 64-route modulation editor");
-    motionButton_.onClick=[this]{motionPanel_.refresh();motionPanel_.setVisible(true);motionPanel_.toFront(true);};
-    addAndMakeVisible(motionButton_);
+    motionPanel_.onClosed=[this]{ setWorkspace(Workspace::perform); };
+    browser_.onClosed=[this]{ setWorkspace(Workspace::perform); };
+    browser_.setEmbedded(true);
     addAndMakeVisible(sourceButton_);
     addChildComponent(browser_);
     presets_.setTooltip("Browse the immutable review catalog and your tagged user presets");
@@ -1410,7 +1441,7 @@ void FxPanel::resized()
         programCurves_.setBounds (central.reduced (4));
     }
     { auto central = band; // MOTION
-        motionButton_.setBounds (central.removeFromTop (38).removeFromLeft (240).reduced (2));
+        motionPanel_.setBounds (central.reduced (4));
         macroLabelBounds_ = central.removeFromTop (16).reduced (4, 0);
         auto macro = central.removeFromTop (34);
         macroSelector_.setBounds (macro.removeFromLeft (74).reduced (2));
@@ -1460,7 +1491,7 @@ void FxPanel::resized()
         midiExport_.setBounds (exportRow.removeFromLeft (150).reduced (2));
     }
     { auto central = band; // PRESETS
-        presets_.setBounds (central.removeFromTop (40).removeFromLeft (240).reduced (2));
+        browser_.setBounds (central.reduced (4));
     }
     { auto central = band; // ADVANCED
         auto sampleRow = central.removeFromTop (34);
@@ -1477,8 +1508,6 @@ void FxPanel::resized()
     // Overlay panels keep their existing centred geometry.
     generatorPanel_->setBounds (getLocalBounds().withSizeKeepingCentre (768, 372));
     sourcePanel_.setBounds (getLocalBounds().withSizeKeepingCentre (665, 301));
-    motionPanel_.setBounds (getLocalBounds().withSizeKeepingCentre (848, 580));
-    browser_.setBounds (getLocalBounds().withSizeKeepingCentre (920, 456));
     wavOptions_.setBounds (getLocalBounds().withSizeKeepingCentre (470, 232));
 }
 namespace {
@@ -1545,8 +1574,12 @@ void FxPanel::applyWorkspaceVisibility()
     // performance knobs stay in PERFORM.
     show (macroSelector_, motion); show (macroDestination_, motion);
     show (macroValue_, motion); show (macroDepth_, motion);
-    // MOTION / PROCESS / TRIGGER / PRESETS / ADVANCED.
-    show (motionButton_, motion);
+    // MOTION / PROCESS / TRIGGER / PRESETS / ADVANCED. Motion and Presets
+    // are real embedded workspace panels now (no single-button overlays).
+    show (motionPanel_, motion);
+    show (browser_, presets);
+    if (workspace_ == Workspace::motion) motionPanel_.refresh();
+    if (workspace_ == Workspace::presets) browser_.open();
     for (std::size_t i = 0; i < effectsType_.size(); ++i) {
         show (effectsType_[i], process);
         show (effectsWet_[i], process);
@@ -1561,7 +1594,6 @@ void FxPanel::applyWorkspaceVisibility()
     show (patternGrid_, trigger); show (patternPage_, trigger);
     for (auto& step : patternSteps_) show (step, trigger);
     show (midiExport_, trigger);
-    show (presets_, presets);
     show (sampleImport_, advanced); show (sampleBuiltin_, advanced);
     show (sampleStatus_, advanced);
     show (wavExport_, advanced);

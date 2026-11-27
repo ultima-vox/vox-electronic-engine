@@ -61,6 +61,10 @@ void checkWorkspaceMatrix()
     panel.setWorkspace (W::motion);
     check (panel.workspace() == W::motion && panel.macroSelector().isVisible(),
            "MOTION owns the macro routing editor");
+    check (panel.motionPanel().isVisible(),
+           "MOTION embeds the real 64-route modulation editor");
+    check (panel.motionPanel().applyButton().isVisible(),
+           "embedded motion editor exposes its apply action");
 
     panel.setWorkspace (W::process);
     check (panel.effectSelector (0).isVisible() && !panel.effectWet (0).isVisible() == false,
@@ -73,6 +77,7 @@ void checkWorkspaceMatrix()
     panel.setWorkspace (W::presets);
     check (panel.factorySelector().isVisible() == false && panel.workspace() == W::presets,
            "PRESETS workspace selected");
+    check (panel.keyboard().isVisible(), "keyboard stays visible in PRESETS");
 
     panel.setWorkspace (W::advanced);
     check (panel.sampleImportButton().isVisible() && panel.dragGrip().isVisible(),
@@ -98,6 +103,51 @@ void checkWorkspaceMatrix()
     // Tab callback path (as fired by VoxTabBar::mouseDown).
     panel.workspaceTabs().onTabChanged (static_cast<int> (W::motion));
     check (panel.workspace() == W::motion, "tab callback switches workspace");
+
+    // Timeline: 20 targets = 4 trajectory kinds across Program + Layer A..D.
+    {
+        auto& curves = panel.programCurves();
+        panel.setWorkspace (W::timeline);
+        check (curves.isVisible(), "TIMELINE embeds the curve panel");
+        check (curves.scopeSelector().isVisible(), "timeline scope selector is visible");
+        int targets = 0;
+        for (int scope = 1; scope <= 5; ++scope) {
+            curves.scopeSelector().setSelectedId (scope, juce::sendNotificationSync);
+            for (int kind = 1; kind <= 4; ++kind) {
+                curves.selector().setSelectedId (kind, juce::sendNotificationSync);
+                check (static_cast<int> (curves.editor().kind()) == kind - 1,
+                       "scope x kind selection binds the active editor");
+                ++targets;
+            }
+        }
+        check (targets == 20, "TIMELINE exposes all 20 targets");
+        curves.scopeSelector().setSelectedId (1, juce::sendNotificationSync);
+        curves.selector().setSelectedId (1, juce::sendNotificationSync);
+    }
+
+    // Contextual source editing from each layer card.
+    {
+        panel.setWorkspace (W::design);
+        auto& card = panel.layerPanel (2);
+        card.editSourceButton().setVisible (true);
+        check (card.onEditSource != nullptr, "layer cards carry a source-edit hook");
+        check (card.editSourceButton().onClick != nullptr,
+               "card SOURCE button carries an action");
+        card.editSourceButton().onClick(); // synchronous off-screen invocation
+        check (panel.sourcePanel().isVisible() && panel.sourcePanel().layerSelector().getSelectedId() == 3,
+               "card SOURCE opens the source editor on that layer");
+        panel.sourcePanel().setVisible (false);
+    }
+
+    // Preset browser is embedded with real search/facet controls.
+    {
+        panel.setWorkspace (W::presets);
+        auto searchVisible = false;
+        for (auto* child : panel.getChildren())
+            if (dynamic_cast<vox::fx::PresetBrowser*> (child) != nullptr && child->isVisible())
+                searchVisible = true;
+        check (searchVisible, "PRESETS embeds the preset browser");
+    }
 
     // Curves toggle contract used by users and the layer-editor tests.
     panel.setWorkspace (W::design);

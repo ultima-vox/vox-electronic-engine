@@ -24,6 +24,9 @@ public:
     juce::Button& soloButton() noexcept { return solo_; }
     CurveEditor& curveEditor() noexcept { return curve_; }
     juce::ComboBox& curveSelector() noexcept { return curveType_; }
+    // Contextual source editing: each card opens the source editor on its own layer.
+    juce::Button& editSourceButton() noexcept { return editSource_; }
+    std::function<void()> onEditSource;
 private:
     template<typename Edit> void editKnob(Edit);
     std::optional<std::uint64_t> dragRevision_;
@@ -32,6 +35,7 @@ private:
     CurveEditor curve_;
     vox::ui::VoxButton enabled_ { "ON", vox::ui::VoxButton::Type::Toggle };
     vox::ui::VoxButton solo_ { "SOLO", vox::ui::VoxButton::Type::Toggle };
+    vox::ui::VoxButton editSource_ { "SOURCE" };
     vox::ui::VoxComboBox family_,curveType_;
     vox::ui::VoxKnob gain_ { "GAIN", vox::ui::VoxKnob::Size::Small };
     vox::ui::VoxKnob pan_ { "PAN", vox::ui::VoxKnob::Size::Small };

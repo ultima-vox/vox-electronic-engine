@@ -50,12 +50,18 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void refresh();
-    CurveEditor& editor() noexcept { return editor_; }
+    CurveEditor& editor() noexcept; // active scope editor
     juce::ComboBox& selector() noexcept { return selector_; }
+    juce::ComboBox& scopeSelector() noexcept { return scope_; }
+    static constexpr int scopeCount = 5; // Program + Layer A..D
 private:
     void refreshHint();
+    void applyScope();
+    CurveEditor& activeEditor() noexcept;
     CurveEditor editor_;
     vox::ui::VoxComboBox selector_;
+    vox::ui::VoxComboBox scope_;
+    std::array<std::unique_ptr<CurveEditor>,4> layerEditors_{};
     juce::TextButton undo_ { "Undo" }, redo_ { "Redo" }, reset_ { "Reset curve" };
     juce::Label hint_;
 };
@@ -87,6 +93,7 @@ public:
 class MotionPanel final : public juce::Component, private juce::ListBoxModel {
 public:
     explicit MotionPanel(FxProcessor&);
+    std::function<void()> onClosed; // invoked when the user closes the editor
     void paint(juce::Graphics&) override;
     void resized() override;
     void refresh(int row=-1);
@@ -138,6 +145,7 @@ public:
     void resized() override;
     juce::ComboBox& scaleSelector() noexcept { return scale_; }
     juce::ComboBox& rootSelector() noexcept { return root_; }
+    juce::ComboBox& layerSelector() noexcept { return layer_; }
     juce::ComboBox& typeSelector(std::size_t slot) noexcept { return filters_[slot].type; }
     juce::Slider& cutoffSlider(std::size_t slot) noexcept { return filters_[slot].hz; }
     juce::Slider& grainLengthSlider() noexcept {return grainLength_;}
@@ -178,6 +186,8 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     std::function<void(bool)> looseFile;
+    std::function<void()> onClosed; // invoked when the user closes the browser
+    void setEmbedded(bool embedded); // workspace embed: no close button
     juce::TextEditor& searchField() noexcept {return search_;}
     juce::TextEditor& nameField() noexcept {return name_;}
     juce::TextButton& saveButton() noexcept {return save_;}
