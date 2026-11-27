@@ -1,5 +1,12 @@
 # VOX FX exact requirement-to-evidence map — 2026-11-22
 
+> **Head update 2026-11-27:** current source is
+> `1625719fd5755fa1516d058b0b272a963aec33c9` on the assigned Arena branch —
+> see [PRODUCT_COMPLETION_20261127.md](PRODUCT_COMPLETION_20261127.md) for the
+> checkpoint evidence and the P1 remediation matrix. The table below is
+> unchanged except that FX-04 local nonlinear evidence is now complete and
+> FPRG v10 migration tests exist; no row is promoted to qualified.
+
 **Product-completion tranche / Draft / HOLD / NO MERGE / NO RELEASE.** This
 map is the current-source reconciliation record requested by owner/TL comment
 [#156](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7210838569).

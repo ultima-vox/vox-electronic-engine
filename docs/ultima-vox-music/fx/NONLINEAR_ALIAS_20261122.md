@@ -1,5 +1,11 @@
 # FX-04 nonlinear quality tranche — Drive and Wavefold
 
+> **Superseded 2026-11-27.** The shipping Wavefold is no longer ADAA: it was
+> restored to the original memoryless transfer and ADAA moved under
+> `experimental::`. See [WAVEFOLD_RESTORE_20261127.md](WAVEFOLD_RESTORE_20261127.md).
+> This document remains the record of the Drive ADAA decision and the
+> superseded ADAA-Wavefold measurement method.
+
 **Development candidate only / Draft / HOLD / NO MERGE / NO RELEASE.** The
 current candidate source is `a6365ebf88414c4ff5813df396e5b12f2fc8e49b` on the
 assigned Arena branch. This slice is not a Windows, VST3-validator, DAW,

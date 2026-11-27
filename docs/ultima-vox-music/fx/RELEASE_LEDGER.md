@@ -1,5 +1,29 @@
 # VOX FX release evidence ledger
 
+## 2026-11-27 — product-completion checkpoint `1625719fd5755fa1516d058b0b272a963aec33c9`, HOLD retained
+
+- TL review comment
+  [#7211163434](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7211163434)
+  P1 items answered: shipping Wavefold restored to the original memoryless
+  triangle fold (bit-identical to `5c2f122` over 4 M samples), ADAA Wavefold
+  kept experimental and unwired, nonlinear regression rewritten with explicit
+  success gates and the clamp-inclusive reference, FPRG v10 migration covered
+  by tests. See [WAVEFOLD_RESTORE_20261127.md](WAVEFOLD_RESTORE_20261127.md)
+  and [PRODUCT_COMPLETION_20261127.md](PRODUCT_COMPLETION_20261127.md).
+- Invariants held: host parameter IDs (`parameters.csv`), Wavefold type ID,
+  frozen diagnostic parser `1.11.0`, create-only WAV/MIDI export policy,
+  frozen `232 review-only / 0 approved` inventory with the `600` target.
+- Task-5 audit: persistent A/B, 17 modulation destinations, browser facets
+  and Save+drag export confirmed already implemented (earlier status notes
+  overstated those gaps); duration lock is intentionally non-serializable in
+  FGEN v4 (tested) and has no UI, so no schema change was made.
+- Windows x64 engineering candidate **prepared, not dispatched**: preflight
+  extraction at this SHA passed (16 PowerShell blocks extracted, not
+  executed; bundle names match `SuiteIdentity.cmake`). Exact-HEAD Windows
+  suite, Steinberg validator and artifact SHA remain open behind CI
+  authorization. This is not Windows, DAW, listening, RC, merge or release
+  evidence.
+
 ## 2026-11-22 — product-completion tranche `a6365ebf88414c4ff5813df396e5b12f2fc8e49b`, HOLD retained
 
 - The assigned Arena branch remains separate from exact PR #156 head

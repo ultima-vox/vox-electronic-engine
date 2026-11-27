@@ -1,5 +1,28 @@
 # VOX FX development status — Draft PR #156
 
+**2026-11-27 product-completion checkpoint (`1625719fd5755fa1516d058b0b272a963aec33c9`):** the assigned Arena branch
+answers TL review comment
+[#7211163434](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7211163434).
+The shipping Wavefold is again the original memoryless triangle fold with the
+±8 clamp (bit-identical to `5c2f122` over four million samples); first-order
+ADAA Wavefold remains compiled only under `experimental::` and is never called
+by the shipping Chain, pending explicit approval. The nonlinear alias suite was
+rebuilt to the review’s fixture list (explicit success gates, clamp-binding
+reference, measured lag, passband, transients, boundaries, Drive legacy
+compatibility metrics) and passes with `0 failure(s)` under ASan/UBSan.
+FPRG v10 forward-compatibility and migration are covered by explicit tests
+across codec, portable and Generator suites. Host parameter IDs, the Wavefold
+type ID, frozen parser `1.11.0`, create-only export and the frozen
+`232 review-only / 0 approved` inventory are unchanged. See
+[WAVEFOLD_RESTORE_20261127.md](WAVEFOLD_RESTORE_20261127.md) and
+[PRODUCT_COMPLETION_20261127.md](PRODUCT_COMPLETION_20261127.md); the latter
+also records the task-5 requirement audit (persistent A/B, all 17 modulation
+destinations, browser facets and Save+drag export are already implemented —
+earlier “stale” notes overstate those gaps) and the Windows candidate
+preparation receipt (preflight extraction passed, **not dispatched**). This
+supersedes the Wavefold/ADAA wording in the 2026-11-22 paragraph below.
+HOLD remains: no Windows CI dispatch, no PR #170 change, no merge, no release.
+
 **Current engineering checkpoint:** the Windows x64 FX-T18 measurement
 scenario is documented in
 [FX_T18_WINDOWS_MEASUREMENT_20261122.md](FX_T18_WINDOWS_MEASUREMENT_20261122.md).
