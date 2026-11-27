@@ -804,11 +804,12 @@ output and identity-bearing artifacts remain outside the repository.
 
 | Field | Owner-verified value |
 |---|---|
-| Windows job | `140167448791` |
-| Actions run | `45895259416` |
-| Operations workflow commit | `c3a708223268a307bbc6bb575c88c86999e43856` |
-| Parser commit/version | accepted replay: `6c364442de8fc355ad42b6c6ec17843a02662240` / `1.10.0`; post-acceptance hardening: `b79d517b5e6a5bc11168b3331956876126c3e42a` / `1.11.0` |
-| Result | exit `0`; `OFFLINE_REPLAY_PASS` |
+| Windows job | prior replay `140167448791`; final replay `140331252293` |
+| Actions run | prior replay `45895259416`; final replay `45946162443` |
+| Operations workflow commit | prior `c3a708223268a307bbc6bb575c88c86999e43856`; final `62191b299c4388d1c302eb1fcbb9e6e71bdbdde3` |
+| Source checkout | final exact source `cf67051aadec802223c49819c72ed264c1eac7cc` |
+| Parser commit/version | accepted replay: `6c364442de8fc355ad42b6c6ec17843a02662240` / `1.10.0`; final hardening/replay: `b79d517b5e6a5bc11168b3331956876126c3e42a` / `1.11.0` |
+| Result | final parser exit `0`; `OFFLINE_REPLAY_PASS` |
 | Input integrity | original input hashes and unchanged-input integrity verified |
 | Parser/provenance integrity | parser hashes, original cleanup HRESULT and EventTrace Header identity verified |
 | Loss and header | lost events `0`; lost buffers `0`; buffers `6`; capacity `16 MiB`; log mode `0` |
@@ -819,15 +820,14 @@ output and identity-bearing artifacts remain outside the repository.
 | Controlled binding | PID start/stop `1/1`; exact creation match `1/1`; lifecycle order and binding valid |
 | Qualification state | diagnostic only; `qualification_prohibited=true`; production receipt `false` |
 
-This closes the retained-artifact offline compatibility acceptance gate only. It
-is not a parser PASS for the current post-acceptance hardening commit, an
-inventory-to-qualification conversion, a `WALL_GATE_PASS`, production
-qualification, approval, merge or release. The current parser hardening keeps
-production parsing fail-closed and requires a new owner-authorized replay if
-its result is to be used as production evidence. On `b79d517b5e6a5bc11168b3331956876126c3e42a` / parser
-`1.11.0`, the local executable wall-gate fixtures and timing-auditor negative
-fixtures passed; those synthetic results are not a replay of the retained
-HAMUNAPTRA artifacts. No raw private artifact is copied into this repository.
+This closes the retained-artifact offline compatibility acceptance gate for
+parser `1.11.0`. It is not an inventory-to-qualification conversion, a
+`WALL_GATE_PASS`, production qualification, approval, merge or release. Freeze
+the accepted parser implementation at this replayed source: no routine parser
+or diagnostic changes are authorized by this record. A future parser change
+requires a specific demonstrated defect, a narrowly scoped review, and a new
+owner-authorized replay. No raw private artifact is copied into this
+repository.
 
 ## 7. Cleanup and retention
 

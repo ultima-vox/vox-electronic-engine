@@ -26,8 +26,8 @@ by inference:
 |---|---|---|
 | Source | owner-approved exact commit and tree SHA | checkout is detached at that exact commit; the job reports `git rev-parse HEAD` and tree; no stale artifact or moving branch is accepted |
 | Base/tool revisions | JUCE `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8`; Steinberg VST3 SDK `v3.8.0_build_66` / `9fad9770f2ae8542ab1a548a68c1ad1ac690abe0` | all submodule/content pins reconcile to the reviewed source record |
-| Parser | final reviewed parser commit and version | parser source hash is retained beside the production parse receipt; the accepted diagnostic replay was parser `6c364442de8fc355ad42b6c6ec17843a02662240`, version `1.10.0`, and is not a qualification receipt |
-| Windows SDK decoder | `C:\Windows\System32\tracerpt.exe`, normalized version `10.0.26100.1`, exact SHA-256 `OWNER_SUPPLIED_TRACERPT_SHA256` | exact path, four-part version, bytes, Microsoft Authenticode, and approved hash all match; a serviced observed version is diagnostic only |
+| Parser | final reviewed source `cf67051aadec802223c49819c72ed264c1eac7cc`; implementation `b79d517b5e6a5bc11168b3331956876126c3e42a`; version `1.11.0` | parser is frozen after the owner-verified retained replay; any future change requires a demonstrated defect and a new owner-authorized replay |
+| Windows SDK decoder | versioned contract decision below; current source pin is `10.0.26100.1` | no production run may use the measured serviced build until the owner approves the explicit contract amendment and its exact hashes/CMS record |
 | ETW collector | `C:\Windows\System32\logman.exe`, owner-approved normalized version `OWNER_SUPPLIED_LOGMAN_VERSION`, exact SHA-256 `OWNER_SUPPLIED_LOGMAN_SHA256` | exact path, version, bytes and Microsoft Authenticode match the same approved tool record |
 | Approval record | `tracerpt-identity-approval.json` plus detached CMS and independent verification receipt | detached CMS chain/revocation and owner thumbprint verify the exact tracerpt/logman paths, versions and hashes; JSON booleans are not proof |
 | Host runtime | Windows PowerShell Desktop 5.1, Visual Studio 2022 x64 C++, Windows SDK, CMake/CTest `>=3.22`, Git, x64 CDB | exact versions, paths, signatures/hashes where applicable, and runner load are retained before execution |
@@ -37,6 +37,36 @@ The owner must preserve the approval JSON, detached CMS signature, independent
 CMS verification receipt, certificate thumbprint, tool identity inventory and
 source/tool manifest. The parser must receive the owner-approved exact
 tracerpt SHA-256; it may not discover a hash and approve it itself.
+
+### 1.1 Versioned production tool-contract decision
+
+The retained compatibility run genuinely measured and tested the serviced
+System32 decoder `C:\Windows\System32\tracerpt.exe` at normalized version
+`10.0.26100.9949`, with tracerpt SHA-256
+`aee3a047976f60e69357eb415d0d69b7b38325a55de67afa77d5b3fd5c28777b`. The same
+owner review recorded `C:\Windows\System32\logman.exe` SHA-256
+`5376695e8ecdeb536b7cede4ba7d10ce6dfe07a51aa7c9651911d2c3cb66840d`; its
+normalized FileVersion must be measured again and entered below rather than
+inferred. These are measured compatibility identities, not automatic
+production approval.
+
+Before any production authorization, the owner must choose one explicit
+versioned contract and sign the choice:
+
+| Contract | tracerpt | logman | Decision state |
+|---|---|---|---|
+| Existing source pin | `10.0.26100.1`, exact owner-approved SHA required | exact owner-approved path/version/SHA required | remains the parser policy until amended |
+| Proposed serviced contract | `10.0.26100.9949`, SHA `aee3a047976f60e69357eb415d0d69b7b38325a55de67afa77d5b3fd5c28777b` | `C:\Windows\System32\logman.exe`, measured version `OWNER_RECONFIRMED_LOGMAN_VERSION`, SHA `5376695e8ecdeb536b7cede4ba7d10ce6dfe07a51aa7c9651911d2c3cb66840d` | proposal only; requires owner approval |
+
+For either contract, the private approval record must bind both exact System32
+paths, normalized four-part versions, SHA-256 values, Microsoft Authenticode
+status and signer/thumbprint, owner certificate thumbprint, detached CMS
+signature, chain/revocation result and independent CMS verification receipt.
+The receipt must bind the approval JSON and signature hashes to the same tuple.
+No version-family match, PATH resolution, hash discovery, binary downgrade or
+self-approval is allowed. The proposed serviced contract cannot be used until
+its logman version, Authenticode details and CMS approval are populated and
+independently verified.
 
 ## 2. Preflight and signed boundary
 
@@ -59,6 +89,24 @@ Before a capture or build, the owner performs the read-only preflight in the
 No future event-loss proof or execution binding may be pre-signed. No service
 or process may be stopped, killed, disabled, restarted or reconfigured to make
 the boundary pass.
+
+### 2.1 Evidence coverage and workload binding
+
+A preflight capture cannot attest a later build or timing workload. The owner
+must bind each artifact to the interval and binary it actually covers:
+
+| Phase | What it covers | Required binding |
+|---|---|---|
+| Build | clean exact-head checkout, dependency/toolchain, Release outputs and validator inputs | source HEAD/tree, build flags, selected CTest executable path, executable/bundle hashes and build receipt |
+| Exclusive measurement | host-wide process boundary and the ETW interval surrounding the measured runner workload | the same host lease, complete four-service baseline, private inventory, ETW start/stop receipts, ETW identity join and execution binding; all four runner services are verified, not inferred from three visible active services |
+| Synthetic timing profiles | routed `54`, authored `54`, typical `9` cells, `160` callbacks per cell | the same selected executable, profile receipt, raw TSV, CTest/JUnit outcome, auditor output and exact interval for each profile |
+| Loaded timing | actual plugin workload with Drums and Synth representative load | separate host/DAW or approved loaded-host receipt, same binary SHA and interval-bound witness; synthetic callback evidence cannot stand in for it |
+| DAW round | real Cubase and REAPER installation, transport, state, Save/drag, bounce and UI scenarios | host/version, bundle SHA, project/settings, reviewer, row-level result and private raw evidence |
+
+The production ETW capture, identity join, loss proof and execution binding must
+cover the actual timing workload, not merely a setup probe. If any interval,
+source/tree, executable hash, lease, process identity or profile receipt is
+not one-to-one, the affected result is `BLOCKED`.
 
 ## 3. Production ETW and identity gate
 
@@ -111,6 +159,58 @@ The owner runs the reviewed source once on the selected Windows x64 runner.
 This follows the [Windows engineering gate](WINDOWS_ENGINEERING_GATE_20261119.md)
 and retains the run URL and exact artifact hashes.
 
+### 4.0 Owner-only execution order and commands
+
+The following is a future owner-console workflow, not an authorization for this
+branch or this agent to execute it. Substitute only values already present in
+the owner-signed manifest; do not invent a source/tree or tool hash.
+
+```powershell
+# Already elevated Windows PowerShell Desktop 5.1 on the owner-approved host.
+$sourceHead = 'OWNER_SIGNED_SOURCE_HEAD'
+$sourceTree = 'OWNER_SIGNED_SOURCE_TREE'
+$juceDir = 'OWNER_SIGNED_JUCE_DIR'
+$buildDir = 'build-t18-owner'
+$outDir = 't18-owner-out'
+
+# Exact detached checkout and clean-source gate; never use a moving branch.
+git fetch origin
+git checkout --detach $sourceHead
+if ((git status --porcelain=v1 --untracked-files=all).Count -ne 0) { throw 'source checkout is not clean' }
+$actualHead = (git rev-parse HEAD).Trim()
+$actualTree = (git rev-parse HEAD^{tree}).Trim()
+if ($actualHead -cne $sourceHead -or $actualTree -cne $sourceTree) { throw 'source HEAD/tree mismatch' }
+
+# Read-only PowerShell 5.1/dummy-bundle preflight.
+$probe = Join-Path $env:TEMP ('vox-fx-t18-preflight-' + [Guid]::NewGuid().ToString('N'))
+python .github/scripts/prepare-fx-windows-preflight.py $probe
+if ($LASTEXITCODE -ne 0) { throw 'preflight extraction failed' }
+powershell.exe -NoProfile -File .github/scripts/Test-FxWindowsPreflight.ps1 -PreparedDir $probe
+if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 preflight failed' }
+
+# Fresh Release build, CTest-selected executable identity, all three profiles,
+# raw TSV/CTest/JUnit/outcome/manifest retention and independent audits.
+& powershell.exe -NoLogo -NoProfile -NonInteractive `
+  -File .\docs\ultima-vox-music\fx\evidence\run-fx-windows-t18.ps1 `
+  -ExpectedHead $sourceHead -ExpectedTree $sourceTree -JuceDir $juceDir `
+  -BuildDir $buildDir -OutputDir $outDir -Python python -TimeoutSeconds 180
+$timingOrchestratorExit = $LASTEXITCODE
+```
+
+The orchestrator must retain one receipt per profile and attempt all three even
+when an earlier profile fails. The expected synthetic profile inventory is
+`54 + 54 + 9 = 117` cells and `117 × 160 = 18,720` callback rows. In addition,
+`loaded_drums` and `loaded_synth` are distinct named loaded-host scenarios,
+with their own declared settings, binary hash, host-bound witness, execution
+interval and raw evidence; they must not be silently folded into the synthetic
+count. The owner declares the exact callback/cell count for each loaded
+scenario before execution. A timeout,
+crash, partial TSV, missing audit or missing outcome remains a failure/block;
+it is never replaced by a later successful profile. The production ETW command,
+identity join and signed execution binding are then run for the same selected
+binary and actual measured interval, using the exact tool contract chosen in
+Section 1.1. The loaded-host and Cubase/REAPER rounds remain separate phases.
+
 ### 4.1 Build, tests and validator
 
 Build a clean x64 Release configuration with the reviewed JUCE/VST3 inputs and
@@ -132,7 +232,46 @@ downloaded artifact SHA-256, compiler/SDK versions and run URL. A skipped
 validator, missing bundle, crash, timeout, failed assertion or missing raw log
 is not a pass.
 
-### 4.2 Loaded FX-T18 timing and safety evidence
+### 4.2 CPU method decision before full timing
+
+The owner-authorized typical diagnostic established that `GetThreadTimes` can
+quantize at `15,625` microseconds, which is coarser than the callback budgets.
+That result remains `CPU_MEASUREMENT_INSUFFICIENT` and cannot be relabeled as
+zero CPU or as a scheduler-only wall result. No full `117`-cell timing run is
+entered until the owner chooses one of these explicit contracts:
+
+**Option A — separately reviewed high-resolution CPU method (preferred if a CPU
+claim is required).** Implement and review a Windows ETW/WPR scheduler trace
+contract that:
+
+1. marks callback boundaries with a no-allocation/no-lock correlation marker and
+   identifies the measured thread unambiguously;
+2. records scheduler running/context-switch intervals, timestamp mode,
+   affinity, provider/version, buffers and lost-event counters;
+3. calibrates trace timestamps to the wall bracket and intersects running
+   intervals with each callback window, including intervals crossing a boundary;
+4. validates resolution and attribution with a same-runner positive control;
+5. marks CPU attribution `UNKNOWN` for missing markers, ambiguous identity,
+   event loss, discontinuity or unresolved overlap, preserving all raw
+   `GetThreadTimes` values.
+
+The owner must approve the provider/event contract and review a bounded Windows
+smoke showing complete correlation, zero loss and resolution materially below
+the strictest callback budget before the full matrix. The existing
+[CPU method proposal](FX_T18_CPU_METHOD_PROPOSAL_20261123.md) is the design
+record; it is not an executed trace or an authorization.
+
+**Option B — explicit wall-only diagnostic policy.** If the decision is callback
+completion rather than attributable thread CPU, the owner may approve a
+versioned wall-only contract in which wall deadline misses remain authoritative,
+allocations/locks/waits remain hard safety failures, all raw CPU values and
+`CPU_MEASUREMENT_INSUFFICIENT` remain visible, and CPU-based qualification is
+prohibited. The policy must specify the same `117` cells, `18,720` callbacks,
+loaded conditions, host boundary, wall threshold, raw-log retention and
+`CPU_UNKNOWN` result. It is not a threshold relaxation and cannot be described
+as CPU qualification or release approval.
+
+### 4.3 Loaded FX-T18 timing and safety evidence
 
 Using the same reviewed binary and the owner-approved host boundary, run the
 routed, authored and typical captures. Cover
@@ -225,15 +364,21 @@ The final decision requires explicit owner sign-off for every gate:
 
 ```text
 source_exact = OWNER_SIGNED
+final_fx_dsp_source_lineage = OWNER_SIGNED
 cms_toolchain = OWNER_SIGNED
-host_boundary = OWNER_SIGNED
-production_etw_receipt = OWNER_SIGNED
-production_identity_join = OWNER_SIGNED
+tracerpt_contract = OWNER_SIGNED_VERSIONED_CHOICE
+logman_contract = OWNER_SIGNED_VERSIONED_CHOICE
+host_boundary_all_four_runner_services = OWNER_SIGNED
+production_etw_receipt = OWNER_SIGNED_FOR_ACTUAL_WORKLOAD
+production_identity_join = OWNER_SIGNED_FOR_ACTUAL_WORKLOAD
+execution_binding = OWNER_SIGNED_FOR_ACTUAL_WORKLOAD
 windows_build_ctest = OWNER_SIGNED
 validator_all_three_bundles = OWNER_SIGNED
+cpu_method = OWNER_SIGNED_OPTION_A_OR_WALL_ONLY_OPTION_B
 fx_t18_loaded_timing = OWNER_SIGNED
 cubase_round = OWNER_SIGNED
 reaper_round = OWNER_SIGNED
+product_readiness_pr156 = SEPARATE_OWNER_SIGNOFF
 manifest_reconciled = OWNER_SIGNED
 qualification_decision = OWNER_SIGNED
 merge_release = PROHIBITED_UNTIL_SEPARATE_AUTHORIZATION
