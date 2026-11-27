@@ -20,13 +20,13 @@ jobs:
           if ($env:COMPUTERNAME -ine 'HAMUNAPTRA') { throw 'BLOCKED: unexpected host' }
       - uses: actions/checkout@v4
         with:
-          ref: 6c364442de8fc355ad42b6c6ec17843a02662240
+          ref: cf67051aadec802223c49819c72ed264c1eac7cc
           persist-credentials: false
       - name: Offline replay (sanitized)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          if ((git rev-parse HEAD).Trim() -ne '6c364442de8fc355ad42b6c6ec17843a02662240') { throw 'BLOCKED: parser checkout mismatch' }
+          if ((git rev-parse HEAD).Trim() -ne 'cf67051aadec802223c49819c72ed264c1eac7cc') { throw 'BLOCKED: parser checkout mismatch' }
           $source = @'
           import hashlib
           import json
@@ -160,6 +160,7 @@ jobs:
                   ]
                   categories.append(("has nonzero sub-100ns timestamp digits", "nonzero sub-100ns timestamp digits"))
                   categories += [(x, x) for x in ("tracerpt process events are not monotonic", "tracerpt process-start identity is duplicated", "controlled process stop has no matching start identity", "tracerpt process-stop identity has a later matching start")]
+                  categories += [(x, x) for x in ("tracerpt process event precedes its process creation time", "tracerpt process ExitTime precedes its process creation time", "tracerpt process-stop identity is duplicated", "tracerpt process stop precedes its matching start", "tracerpt process-start PID conflicts with an earlier unmatched stop", "tracerpt process-stop identity conflicts with its PID start identity", "diagnostic mode permits only one unmatched process stop", "tracerpt process-stop identity conflicts with a later PID start")]
                   failure_category = next((category for marker, category in categories if marker in reason), "parser rejected retained evidence")
                   if not output.is_file():
                       print("diagnostic_report_present=false", flush=True)
@@ -175,6 +176,9 @@ jobs:
                   for k in list(required) + extra_counts:
                       actual = report.get(k)
                       print(k + "=" + (json.dumps(actual) if type(actual) in (int, bool) else "missing_or_invalid"), flush=True)
+                  if report.get("parser_version") != "1.11.0":
+                      stop("unexpected parser report version")
+                  print("parser_version=1.11.0", flush=True)
                   header = report.get("eventtrace_header", {})
                   header_valid = header.get("opcode") == "Header" and type(header.get("version")) is int and header["version"] in (0, 2)
                   hashes_valid = all(report.get(field) == before[name] for field, name in [("raw_etl_sha256", "compat.etl"), ("decoded_xml_sha256", "tracerpt-output.xml"), ("summary_sha256", "tracerpt-summary.txt"), ("controlled_process_receipt_sha256", "controlled-process.json")])
