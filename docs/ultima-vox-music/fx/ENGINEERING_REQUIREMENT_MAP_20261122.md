@@ -13,6 +13,7 @@ candidate; older evidence remains historical and is not silently reattributed.
 | Assigned Arena branch | `arena/3f9aa012-vox-electronic-engine` |
 | Assigned branch base | `c7ee608a0879087d9dade1f2471c69a1bde92732` (`next/fx-development`) |
 | Arena documentation head before this tranche | `ef0f975` |
+| Current product-completion candidate | `a6365ebf88414c4ff5813df396e5b12f2fc8e49b` (pushed after this record) |
 | Exact remote PR #156 head | `5c2f122c0203dde57bda7cd563340164601579b4` |
 | Accepted #170 tooling/parser source | `cf67051aadec802223c49819c72ed264c1eac7cc`; parser implementation `b79d517b5e6a5bc11168b3331956876126c3e42a`; parser `1.11.0` |
 | Local lineage result | Grafted checkout produced no `git merge-base` SHA; `git rev-list --left-right --count HEAD...refs/remotes/origin/pr/156` returned `11 233`. The PR head is fetched as `refs/remotes/origin/pr/156` and is **not merged**. |
@@ -63,6 +64,31 @@ synthetic PlayHead tests, and offscreen JUCE paths do not substitute for it.
 | **FX-T18 no allocation/blocking/deadlines** | `processBlock`, bounded grain/effects state; `FxRuntimeStressTests.cpp`, `audit-fx-timing.py`, accepted parser/runbook/qualification plan | Open / diagnostic-only | Accepted replay is `OFFLINE_REPLAY_PASS`, not production qualification; `5/4/9` observed vs `5/3/8` reconciled; CPU remains UNKNOWN/insufficient; no full matrix |
 | **FX-T19 source/rights** | recipe/provenance docs, `SampleReference.h`, `PortablePreset.h`, frozen transfer/index files | Partial | Hash/index checks are not rights or distribution approval; no owner rights sign-off |
 | **FX-T20 owner round** | `WINDOWS_ENGINEERING_GATE_20261119.md`, `RELEASE_LEDGER.md`, DAW checklist to be prepared after build | Missing / not ready | One separately authorized Cubase/REAPER round after technical gate and owner listening |
+
+## Local outcomes at candidate `a6365ebf88414c4ff5813df396e5b12f2fc8e49b`
+
+The checkout has no `cmake` and no JUCE dependency tree, so CMake/CTest,
+JUCE processor/editor, VST3, Windows, and DAW tests were not executable here.
+Targeted JUCE-independent C++ fixtures were compiled with `/usr/bin/g++`
+`-std=c++20 -O2 -Wall -Wextra -pedantic` (and `-pthread` for the store) and
+ran to zero failures:
+
+- `FxProgramCodecTests`, `FxProgramStoreTests`, `FxSourceSoundTests`,
+  `FxGeneratorTests`, `FxGeneratorStateTests`;
+- `FxEffectsTests`, `FxNonlinearAliasTests`, `FxEffectTailTests`, and
+  `FxMacroRoutingTests`; `FxRuntimeStressTests` was **not run** because it
+  includes the JUCE-backed `Processor.h` path;
+- `FxNoiseRiserTests`, `FxFormantTests`, `FxSquelchTests`, `FxGlitchTests`,
+  `FxGranularTests`, `FxFamilyDifferentiationTests`;
+- `FxPlaybackModeTests`, `FxBarEventTests`, `FxCurveTrajectoryTests`,
+  `FxPatternCodecTests`, `FxPatternPlaybackTests`, `FxPatternGridTests`,
+  `FxOfflineRenderTests`, and `FxFactoryCandidatesTests`.
+
+The standalone executables emitted the existing non-fatal compiler warning in
+`MacroRouting.h` about a one-line `for` statement. No source warning was
+reclassified as a product failure. The accepted parser fixture/negative checks
+and Python compilation remain prior evidence; no live ETW or Windows run was
+performed in this tranche.
 
 ## Prioritized P0/P1/P2 ledger
 

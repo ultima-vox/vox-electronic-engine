@@ -1,6 +1,6 @@
 # VOX FX release evidence ledger
 
-## 2026-11-22 — product-completion tranche, HOLD retained
+## 2026-11-22 — product-completion tranche `a6365ebf88414c4ff5813df396e5b12f2fc8e49b`, HOLD retained
 
 - The assigned Arena branch remains separate from exact PR #156 head
   `5c2f122c0203dde57bda7cd563340164601579b4`; no merge or integrated-candidate

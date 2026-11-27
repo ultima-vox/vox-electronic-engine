@@ -1,9 +1,10 @@
 # FX-04 nonlinear quality tranche — Drive and Wavefold
 
-**Development candidate only / Draft / HOLD / NO MERGE / NO RELEASE.** This
-slice is on the assigned Arena branch and is not a Windows, VST3-validator,
-DAW, timing, listening, or release qualification result. Original host
-parameter IDs and the original Wavefold type ID are unchanged.
+**Development candidate only / Draft / HOLD / NO MERGE / NO RELEASE.** The
+current candidate source is `a6365ebf88414c4ff5813df396e5b12f2fc8e49b` on the
+assigned Arena branch. This slice is not a Windows, VST3-validator, DAW,
+timing, listening, or release qualification result. Original host parameter
+IDs and the original Wavefold type ID are unchanged.
 
 ## Source changes
 
