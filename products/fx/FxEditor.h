@@ -3,6 +3,9 @@
 #include "components/VoxKnob.h"
 #include "components/VoxButton.h"
 #include "components/VoxComboBox.h"
+#include "components/VoxTabBar.h"
+#include "components/VoxKeyboard.h"
+#include "components/VoxSectionHeader.h"
 #include "LayerPanel.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <deque>
@@ -255,6 +258,15 @@ public:
     ~FxPanel() override;
     void paint (juce::Graphics&) override;
     void resized() override;
+    // Eight functional workspaces (TZ 13.2). One workspace shows at a time;
+    // overlays (Source/Motion/Generator/Presets/WAV options) keep their
+    // existing open/close behaviour on top of the current workspace.
+    enum class Workspace { design=0, perform, timeline, motion, process, trigger, presets, advanced, count };
+    static constexpr int workspaceCount = static_cast<int>(Workspace::count);
+    void setWorkspace (Workspace workspace);
+    Workspace workspace() const noexcept { return workspace_; }
+    vox::ui::VoxKeyboard& keyboard() noexcept { return keyboard_; }
+    vox::ui::VoxTabBar& workspaceTabs() noexcept { return workspaceTabs_; }
     juce::Slider& outputSlider() noexcept { return output_.getSlider(); }
     juce::Slider& durationSlider() noexcept { return duration_.getSlider(); }
     juce::ComboBox& comparisonSelector() noexcept { return comparison_; }
@@ -300,6 +312,8 @@ public:
     LayerPanel& layerPanel(std::size_t index) noexcept { return *layers_[index]; }
 private:
     void timerCallback() override;
+    void focusLost (juce::Component::FocusChangeType cause) override;
+    void applyWorkspaceVisibility();
     void importSample();
     void exportPattern(bool drag=false);
     void beginFileDrag();
@@ -375,5 +389,12 @@ private:
     std::array<float,2> shownPeaks_{};
     unsigned shownEvents_=0,shownGrains_=0,clipHold_=0,fxTailHold_=0;
     std::uint32_t shownDropped_=0;
+    // Workspace shell: tab strip, section header, persistent keyboard.
+    vox::ui::VoxTabBar workspaceTabs_;
+    vox::ui::VoxKeyboard keyboard_;
+    vox::ui::VoxSectionHeader workspaceHeader_;
+    Workspace workspace_ = Workspace::design;
+    bool syncingTabs_ = false;
+    juce::Rectangle<int> meterBounds_, macroLabelBounds_, fxLabelBounds_;
 };
 } // namespace vox::fx

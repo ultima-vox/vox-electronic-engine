@@ -503,6 +503,13 @@ target_link_libraries(suite_fx_gain_staging_tests PRIVATE vox_preset juce::juce_
 add_test(NAME suite_fx_gain_staging_tests COMMAND suite_fx_gain_staging_tests)
 set_tests_properties(suite_fx_gain_staging_tests PROPERTIES LABELS suite)
 
+add_executable(suite_fx_ui_workspace_keyboard_tests FxUiWorkspaceKeyboardTests.cpp)
+vox_suite_add_allocation_probe(suite_fx_ui_workspace_keyboard_tests)
+target_include_directories(suite_fx_ui_workspace_keyboard_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/products/fx ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+target_link_libraries(suite_fx_ui_workspace_keyboard_tests PRIVATE ${VOX_SUITE_fx_TARGET})
+add_test(NAME suite_fx_ui_workspace_keyboard_tests COMMAND suite_fx_ui_workspace_keyboard_tests)
+set_tests_properties(suite_fx_ui_workspace_keyboard_tests PROPERTIES LABELS suite)
+
 add_executable(suite_fx_pattern_benchmark FxPatternBenchmark.cpp)
 target_include_directories(suite_fx_pattern_benchmark PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_pattern_benchmark COMMAND suite_fx_pattern_benchmark)

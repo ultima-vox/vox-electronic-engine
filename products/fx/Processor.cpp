@@ -610,6 +610,20 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         peaks_.store(0,std::memory_order_relaxed);publishTelemetry(engine_.activeEventCount(),false,false);publishPlayhead(false);
         return;
     }
+    // UI keyboard notes are consumed at block start (position 0), before
+    // host MIDI and pattern scheduling. Offline bounces discard the live
+    // queue; when the graph is not admitted the events are dropped too so
+    // the bounded ring can never burst stale notes into a later block.
+    {
+        UiNoteEvent event;
+        if(!admit||offlineBounce){while(uiNotePop(event)){}}
+        else while(uiNotePop(event)){
+            if(event.kind!=0)
+                (void)engine_.noteOn(uiNoteChannel,event.note,static_cast<float>(event.velocity)/127.0f,
+                                     eventDuration,selection!=0,selection);
+            else engine_.noteOff(uiNoteChannel,event.note);
+        }
+    }
     auto* left = buffer.getWritePointer (0);
     auto* right = buffer.getWritePointer (1);
     int position = 0;
@@ -677,6 +691,9 @@ void FxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     for(int i=0;i<size;++i){peakL=std::max(peakL,std::abs(left[i]));peakR=std::max(peakR,std::abs(right[i]));}
     peaks_.store(std::bit_cast<std::uint32_t>(peakL)|(std::uint64_t{std::bit_cast<std::uint32_t>(peakR)}<<32),std::memory_order_relaxed);
     const bool clip=peakL>=1.f||peakR>=1.f;
+    const auto hostMask=engine_.activeNoteMask(uiNoteChannel);
+    hostNoteMaskLow_.store(hostMask[0],std::memory_order_relaxed);
+    hostNoteMaskHigh_.store(hostMask[1],std::memory_order_relaxed);
     publishTelemetry(activeEvents,clip,fxTailOnly);publishPlayhead(!offlineBounce);
     if(clip)clipLatched_.store(true,std::memory_order_relaxed);
 }

@@ -6,3 +6,4 @@
 #include "components/VoxComboBox.h"
 #include "components/VoxTabBar.h"
 #include "components/VoxSectionHeader.h"
+#include "components/VoxKeyboard.h"

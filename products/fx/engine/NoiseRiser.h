@@ -294,6 +294,16 @@ public:
         return count;
     }
     std::uint32_t droppedEventCount() const noexcept { return droppedEvents_; }
+    // Audio-thread only: bit mask of active notes on every channel except
+    // excludeChannel. The editor reads the published snapshot (not this
+    // array) so host-held keys and UI-keyboard keys stay separately owned.
+    std::array<std::uint64_t,2> activeNoteMask(int excludeChannel) const noexcept {
+        std::array<std::uint64_t,2> mask{0,0};
+        for(const auto& voice:voices_)
+            if(voice.active&&voice.channel!=excludeChannel&&voice.note>=0&&voice.note<128)
+                mask[static_cast<std::size_t>(voice.note)>>6]|=std::uint64_t{1}<<(voice.note&63);
+        return mask;
+    }
     unsigned activeGrainCount() const noexcept {
         return static_cast<unsigned>(std::popcount(grainMask_));
     }
