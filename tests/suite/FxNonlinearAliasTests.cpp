@@ -528,10 +528,14 @@ int main() {
               "prepare rejects out-of-range and non-finite rates");
         check(chain.prepare(8000) && chain.prepare(384000), "prepare accepts supported rate edges");
         check(!chain.set(4, {}) &&
-              !chain.set(0, {Type::wavefold, std::nan(""), 0.f}) &&
+              // MSVC C2397: Settings is brace-initialized with float members,
+              // so the NaN inputs must be float-typed — std::nan("") is
+              // double and narrows. keep std::nan("") only where the callee
+              // takes double (prepare above).
+              !chain.set(0, {Type::wavefold, std::numeric_limits<float>::quiet_NaN(), 0.f}) &&
               !chain.set(0, {Type::wavefold, 1.5f, 0.f}) &&
               !chain.set(0, {Type::wavefold, 1.f, -0.1f}) &&
-              !chain.set(0, {Type::wavefold, 1.f, std::nan("")}) &&
+              !chain.set(0, {Type::wavefold, 1.f, std::numeric_limits<float>::quiet_NaN()}) &&
               !chain.set(0, {Type::wavefold, 1.f, 2.f}) &&
               !chain.set(0, {static_cast<Type>(200), 1.f, .5f}),
               "set rejects invalid slot, wet, amount and type");

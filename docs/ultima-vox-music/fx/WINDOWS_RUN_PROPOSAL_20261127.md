@@ -1,5 +1,21 @@
 # Proposal — ONE exact-source Windows x64 engineering run — 2026-11-27
 
+**STATUS UPDATE (TL comment
+[#7213197538](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7213197538)):
+the first authorized run at `8ebdec0`
+([run 45959826386](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/45959826386))
+passed preflight/configure and **failed the build** on MSVC C2397
+(narrowing `std::nan("")` into `Settings` float members at
+`FxNonlinearAliasTests.cpp:531,534`); CTest/validator skipped, no VST3
+produced. The two inputs are fixed to
+`std::numeric_limits<float>::quiet_NaN()` with a repo-wide list-init audit
+finding no other sites and focused regression green — see RELEASE_LEDGER.
+A corrected-SHA re-run under this same plan requires **fresh owner
+authorization**; Windows evidence does not transfer between SHAs. The
+pinned source below therefore becomes the corrected SHA once authorized,
+disclosed against `8ebdec0` as the two-line test delta plus prior
+corrections.
+
 **PROPOSED / NOT AUTHORIZED / NOT DISPATCHED. Draft / HOLD / NO MERGE / NO
 RELEASE.** Prepared per TL comment
 [#7212562366](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7212562366)

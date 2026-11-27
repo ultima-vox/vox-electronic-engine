@@ -32,6 +32,28 @@
   local-audit framing). One exact-source HAMUNAPTRA run proposed in
   [WINDOWS_RUN_PROPOSAL_20261127.md](WINDOWS_RUN_PROPOSAL_20261127.md) —
   **not dispatched, owner authorization required**.
+- **Authorized Windows engineering run — FAIL, focused fix** (TL comment
+  [#7213197538](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7213197538)):
+  HAMUNAPTRA job 140374750304 /
+  [run 45959826386](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/45959826386)
+  at `8ebdec0` passed host/source, PowerShell Desktop 5.1.26100.9711
+  preflight (19 scripts + inventory fixtures), dependency/validator
+  preparation and CMake configure, then **build failed MSVC C2397** at
+  `FxNonlinearAliasTests.cpp:531,534` — `std::nan("")` (double) narrowed
+  into `Settings` float members; CTest and validator skipped; the uploaded
+  510-byte archive is environment-only, **not VST3**. Fix: those two inputs
+  only, now `std::numeric_limits<float>::quiet_NaN()` (double NaN retained
+  for `prepare(double)`; negative checks unchanged). Repo-wide list-init
+  audit found **no other** C2397-class sites (all remaining NaN/double uses
+  are double-parameter calls; float-aggregate brace inits use float
+  variables or representable constants). Focused regression at the corrected
+  SHA: FxNonlinearAliasTests (strict `-Werror`, plus ASan/UBSan),
+  FxEffectsTests, FxProgramCodecTests, FxGeneratorTests,
+  FxPortablePresetTests — **0 failures each**; GCC cannot diagnose this
+  narrowing even with `-Wfloat-conversion -Werror` (verified), which is why
+  Linux stayed green. Windows evidence does not transfer to the corrected
+  SHA; **no re-dispatch until the owner authorizes the corrected SHA**.
+  HOLD/no merge/no release unchanged; no ETW work.
 
 ## 2026-11-22 — product-completion tranche `a6365ebf88414c4ff5813df396e5b12f2fc8e49b`, HOLD retained
 
