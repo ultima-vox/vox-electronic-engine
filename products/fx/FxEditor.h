@@ -143,6 +143,7 @@ public:
     juce::ComboBox& sliceGridSelector() noexcept {return sliceGrid_;}
     juce::ComboBox& sliceReadSelector() noexcept {return sliceRead_;}
     juce::ToggleButton& sliceGate(std::size_t i) noexcept {return sliceGate_[i];}
+    juce::Slider& familyControlSlider(std::size_t i) noexcept {return familyControls_[i];}
 private:
     void close();
     template <typename Edit> void editGlitch(Edit);
@@ -150,8 +151,10 @@ private:
     FxProcessor& processor_;
     juce::ComboBox layer_, root_, scale_;
     StructuralSlider transpose_,character_,grainLength_,grainPosition_,grainTravel_;
+    std::array<StructuralSlider,3> familyControls_;
     juce::ToggleButton scatter_{"Scatter"},reverse_{"Reverse"};
     juce::Label characterLabel_;
+    std::array<juce::Label,3> familyControlLabels_;
     juce::ComboBox sliceGrid_,sliceRead_;
     std::array<juce::ToggleButton,4> sliceGate_;
     juce::TextButton sliceReset_{"Reset slices"};
@@ -311,6 +314,7 @@ private:
     void finishPatternDrag();
     void refreshMacro();
     void refreshGenerator();
+    void refreshEffectSemantics(std::size_t);
     FxProcessor& processor_;
     SavePicker savePicker_;
     ExternalDrag externalDrag_;

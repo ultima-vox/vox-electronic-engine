@@ -37,6 +37,21 @@ struct GrainShape {
     }
     bool operator==(const GrainShape&) const = default;
 };
+// Three source-family controls are deliberately signed around zero so the
+// default remains byte/audio compatible with the original family algorithms.
+// The editor supplies family-specific names, but the storage is one bounded
+// shape shared by every family and therefore remains portable across hosts.
+struct FamilyControls {
+    float primary=0; // family-specific timbre or balance
+    float motion=0;  // family-specific sweep, spread, or movement
+    float density=0; // family-specific excitation, partial, or texture density
+    bool valid() const noexcept {
+        return std::isfinite(primary)&&primary>=-1&&primary<=1&&
+               std::isfinite(motion)&&motion>=-1&&motion<=1&&
+               std::isfinite(density)&&density>=-1&&density<=1;
+    }
+    bool operator==(const FamilyControls&) const = default;
+};
 // A four-step, event-local gate over a fixed procedural 256-sample capture.
 // Values describe source playback, not host Pattern, PPQ or pitch automation.
 enum class SliceGrid : std::uint8_t { eighth, sixteenth, thirtySecond };

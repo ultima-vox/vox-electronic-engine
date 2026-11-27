@@ -58,7 +58,12 @@ for src in products/fx/{Processor,FxEditor,LayerPanel,CurveEditor}.cpp products/
     n=${src##*/}; dst="$out/obj/${n%.cpp}.o"
     echo "VOX $src"; g++ "${flags[@]}" "${prod[@]}" -O2 -c "$src" -o "$dst"; objects+=("$dst")
 done
-wrap=(-Wl,--wrap=pthread_mutex_lock -Wl,--wrap=pthread_mutex_trylock -Wl,--wrap=pthread_rwlock_rdlock -Wl,--wrap=pthread_rwlock_wrlock)
+wrap=(-Wl,--wrap=pthread_mutex_lock -Wl,--wrap=pthread_mutex_trylock -Wl,--wrap=pthread_mutex_timedlock
+      -Wl,--wrap=pthread_rwlock_rdlock -Wl,--wrap=pthread_rwlock_tryrdlock
+      -Wl,--wrap=pthread_rwlock_wrlock -Wl,--wrap=pthread_rwlock_trywrlock
+      -Wl,--wrap=pthread_spin_lock
+      -Wl,--wrap=pthread_cond_wait -Wl,--wrap=pthread_cond_timedwait
+      -Wl,--wrap=sem_wait -Wl,--wrap=sem_timedwait)
 libs=(-ldl -lrt -l:libz.so.1 -l:libX11.so.6 -l:libXext.so.6 -l:libfreetype.so.6 -l:libfontconfig.so.1 -l:libpng16.so.16 -l:libjpeg.so.62)
 git rev-parse HEAD
 # FxAutomationTests also takes products/fx/parameters.csv, the frozen contract.

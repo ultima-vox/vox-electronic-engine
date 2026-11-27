@@ -40,7 +40,7 @@ inline void applyLocks(NoiseLayer& next,const NoiseLayer& old,std::uint32_t mask
     if(mask&cutoffCurve)next.cutoffCurve=old.cutoffCurve;
     if(mask&filters)next.filters=old.filters;
     if(mask&transpose)next.transpose=old.transpose;
-    if(mask&character){next.character=old.character;next.grains=old.grains;next.glitch=old.glitch;}
+    if(mask&character){next.character=old.character;next.grains=old.grains;next.glitch=old.glitch;next.familyControls=old.familyControls;}
 }
 inline bool generate(const Settings& settings,const Result& previous,const Locks& locks,Result& output) noexcept {
     if(!settings.valid() || !previous.program.valid() || !std::isfinite(previous.seconds) || previous.seconds<.05f || previous.seconds>32) return false;
@@ -52,8 +52,8 @@ inline bool generate(const Settings& settings,const Result& previous,const Locks
     Random motion(settings.seed ^ 0xbe31d295u);
     for(std::size_t i=0;i<next.program.layers.size();++i){
         auto& l=next.program.layers[i];
-        const auto filters=l.filters;const auto transpose=l.transpose;const auto character=l.character;const auto grains=l.grains;const auto glitch=l.glitch;
-        l={};l.filters=filters;l.transpose=transpose;l.character=character;l.grains=grains;l.glitch=glitch; // not generator-owned controls
+        const auto filters=l.filters;const auto transpose=l.transpose;const auto character=l.character;const auto grains=l.grains;const auto glitch=l.glitch;const auto familyControls=l.familyControls;
+        l={};l.filters=filters;l.transpose=transpose;l.character=character;l.grains=grains;l.glitch=glitch;l.familyControls=familyControls; // not generator-owned controls
         l.enabled=static_cast<int>(i)<settings.complexity;
         l.family=static_cast<NoiseFamily>(i==0?settings.family:static_cast<int>(rng.next()%12));
         l.timing.offset=i==0?0.0f:rng.unit()*.35f;

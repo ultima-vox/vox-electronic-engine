@@ -61,6 +61,18 @@ AliasResult measureDirect(float amount, double rate, int fundamentalBin) {
     return analyse(left, fundamentalBin);
 }
 
+AliasResult measureDirectWavefold(float amount, double rate, int fundamentalBin) {
+    const double f0 = fundamentalBin * rate / window;
+    const double gain = 1.0 + 7.0 * amount;
+    const double pi = 3.14159265358979323846;
+    std::vector<float> left(window);
+    for (int i = 0; i < window; ++i) {
+        const double x = std::sin(2 * pi * f0 * i / rate);
+        left[i] = static_cast<float>((2.0 / pi) * std::asin(std::sin(pi * x * gain * .5)));
+    }
+    return analyse(left, fundamentalBin);
+}
+
 AliasResult measure(vox::fx::effects::Type type, float amount, double rate, int fundamentalBin) {
     vox::fx::effects::Chain chain;
     AliasResult result;
@@ -89,11 +101,14 @@ int main() {
                 const auto drive = measure(Type::drive, amount, rate, bin);
                 const auto direct = measureDirect(amount, rate, bin);
                 const auto fold = measure(Type::wavefold, amount, rate, bin);
+                const auto directFold = measureDirectWavefold(amount, rate, bin);
                 std::printf("%5.0f Hz f0 %7.1f amt %.1f: direct tanh %.4f (-%4.1f dB), "
-                            "antialiased Drive %.4f (-%4.1f dB), wavefold %.4f (-%4.1f dB)\n",
+                            "antialiased Drive %.4f (-%4.1f dB), direct wavefold %.4f (-%4.1f dB), "
+                            "ADAA wavefold %.4f (-%4.1f dB)\n",
                             rate, bin * rate / window, amount, direct.ratio,
                             -10 * std::log10(direct.ratio + 1e-12), drive.ratio,
-                            -10 * std::log10(drive.ratio + 1e-12), fold.ratio,
+                            -10 * std::log10(drive.ratio + 1e-12), directFold.ratio,
+                            -10 * std::log10(directFold.ratio + 1e-12), fold.ratio,
                             -10 * std::log10(fold.ratio + 1e-12));
                 check(std::isfinite(drive.ratio) && drive.ratio >= 0 && drive.ratio <= 1,
                       "drive alias measure in range");
@@ -103,11 +118,17 @@ int main() {
                 check(drive.ratio <= .55 * direct.ratio + 1e-6,
                       "antialiased Drive folds less energy than direct tanh");
                 check(drive.ratio < .06, "antialiased Drive keeps folded energy low");
+                check(std::isfinite(fold.ratio) && fold.ratio >= 0 && fold.ratio <= 1,
+                      "wavefold alias measure in range");
+                check(fold.ratio <= directFold.ratio + 1e-5,
+                      "ADAA Wavefold does not increase folded energy");
             }
         }
         // Amount 0 is a linear slot; nothing may be generated.
         const auto bypassed = measure(Type::drive, 0.0f, rate, 1707);
         check(bypassed.ratio < 1e-12, "zero Drive amount is alias-free");
+        const auto foldBypassed = measure(Type::wavefold, 0.0f, rate, 1707);
+        check(foldBypassed.ratio < 1e-12, "zero Wavefold amount is bit-transparent");
     }
     // Structural behaviour the ADAA state must not disturb.
     vox::fx::effects::Chain chain;
