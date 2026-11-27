@@ -23,6 +23,15 @@
   suite, Steinberg validator and artifact SHA remain open behind CI
   authorization. This is not Windows, DAW, listening, RC, merge or release
   evidence.
+- TL comment
+  [#7212562366](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7212562366)
+  accepted `8ebdec0` for Windows engineering preparation; nonblocking
+  corrections applied (file list, FX-T09/FX-T16/FX-T17/FX-T20 numbering,
+  SHA-attributed test evidence with retained CTest/JUnit/provenance logs,
+  amount-0 help qualified to nominal ±1, no whole-bounce-identity claim,
+  local-audit framing). One exact-source HAMUNAPTRA run proposed in
+  [WINDOWS_RUN_PROPOSAL_20261127.md](WINDOWS_RUN_PROPOSAL_20261127.md) —
+  **not dispatched, owner authorization required**.
 
 ## 2026-11-22 — product-completion tranche `a6365ebf88414c4ff5813df396e5b12f2fc8e49b`, HOLD retained
 

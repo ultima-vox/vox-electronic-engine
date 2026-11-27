@@ -41,7 +41,7 @@ inline constexpr const char* amountHelp(Type type) noexcept {
     switch(type){
         case Type::lowpass:return "Type-specific cutoff from 60 Hz to 18 kHz";
         case Type::drive:return "Antialiased saturation depth; amount 0 is transparent";
-        case Type::wavefold:return "Original triangle fold depth (memoryless); amount 0 is transparent";
+        case Type::wavefold:return "Original triangle fold depth (memoryless); amount 0 is transparent for nominal ±1 input";
         case Type::bitcrush:return "Quantization reduction, bounded to 1–15 bits";
         case Type::ring:return "20 Hz to 2 kHz ring modulation carrier";
         case Type::gate:return "1 Hz to 16 Hz synced gate";

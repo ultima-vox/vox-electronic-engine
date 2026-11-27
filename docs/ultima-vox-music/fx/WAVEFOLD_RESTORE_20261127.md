@@ -23,12 +23,18 @@ the frozen `232 review-only / 0 approved` inventory are unchanged.
 - A standalone differential harness compared `wavefoldTransfer` against the
   verbatim `5c2f122` expression over **4,000,000 samples** (uniform inputs
   ±4 across all amounts, plus over-range ±16 at amount 1.0 where the clamp
-  binds): **0 bit mismatches**. Sound, phase/transient response and legacy
-  project bounces therefore match the pre-change implementation for the same
-  input, as required by the review.
+  binds): **0 bit mismatches**. This is **transfer-level equivalence for the
+  same input** — per TL comment #7212562366 it is *not* proof that whole old
+  project bounces are identical, because other DSP in the project changed
+  since the pre-change baseline. Bounce-level claims require an
+  owner-authorized rerender/compare (§4).
 - `amountHelp(Type::wavefold)` no longer claims antialiasing; it now reads
-  “Original triangle fold depth (memoryless); amount 0 is transparent”. The
-  Drive help still correctly describes ADAA, which Drive keeps.
+  “Original triangle fold depth (memoryless); amount 0 is transparent for
+  nominal ±1 input”. The qualification matters: at amount 0 the legacy
+  transfer still **folds over-range input** (|x|>1) and clamps beyond ±8 —
+  amount-0 transparency holds only for nominal [-1,1] input, exactly as the
+  original transfer behaved. The Drive help still correctly describes ADAA,
+  which Drive keeps.
 
 ## 2. ADAA Wavefold kept experimental (P1)
 
@@ -53,10 +59,14 @@ list:
   probe asserts prepare/set success **and** a measurable RMS/peak floor
   before any ratio is used. A zero alias ratio on silence or a failed setup
   can no longer pass.
-- **Zero-amount transparency is a real assertion.** For both Drive and
-  Wavefold, amount 0 is compared **sample by sample** against the input
-  (max error < 1e-6) with measurable output level; the alias ratio is only a
-  secondary generated-energy guard, not the transparency claim.
+- **Zero-amount transparency is a real assertion (nominal [-1,1]).** For
+  both Drive and Wavefold, amount 0 is compared **sample by sample** against
+  the input (max error < 1e-6, stimulus amplitude 0.4, i.e. within nominal
+  ±1) with measurable output level; the alias ratio is only a secondary
+  generated-energy guard, not the transparency claim. Over-range input at
+  amount 0 still follows the legacy fold/clamp — that is intentional
+  transfer preservation, not a bypass branch, and is qualified in the help
+  text above.
 - **Actual pre-change reference.** The Wavefold reference is the original
   memoryless transfer **including the ±8 clamp**, evaluated on the same
   float samples the Chain consumes. The shipping render must match it

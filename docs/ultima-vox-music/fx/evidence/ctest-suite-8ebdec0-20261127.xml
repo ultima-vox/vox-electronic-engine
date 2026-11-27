@@ -1,0 +1,762 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="78"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="213"
+	timestamp="2026-11-27T07:42:18"
+	>
+	<testcase name="vox_preset_tests" classname="vox_preset_tests" time="0.00336689" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>state container tests passed
+</system-out>
+	</testcase>
+	<testcase name="suite_identity_tests" classname="suite_identity_tests" time="0.106572" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>VOX Trance Synthesis   VxTS ABCDEF019182FAEB556C567856785453
+VOX Drums              VxDr ABCDEF019182FAEB556C567856784472
+VOX FX                 VxFX ABCDEF019182FAEB556C567856784658
+</system-out>
+	</testcase>
+	<testcase name="suite_identity_doc" classname="suite_identity_doc" time="0.0496808" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>-- IDENTITY.md matches SuiteIdentity.cmake
+</system-out>
+	</testcase>
+	<testcase name="suite_provenance" classname="suite_provenance" time="0.00575235" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>-- provenance: 18 files identical to their reviewed sources
+</system-out>
+	</testcase>
+	<testcase name="suite_effects_tests" classname="suite_effects_tests" time="0.00725795" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>Effects chain tests passed (56)
+</system-out>
+	</testcase>
+	<testcase name="suite_effects_tail_policy_tests" classname="suite_effects_tail_policy_tests" time="0.105941" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>PASS: bounded max-feedback tails
+PASS: serial whole-chain deadline/partitions
+PASS: expiry/retrigger fresh equivalence
+PASS: retrigger during fade
+PASS: no hidden noise gate
+PASS: disable/bypass history
+PASS: memoryless/dry samples
+PASS: versioned state policy
+PASS: allocation-free deadline path
+6023910 checks; 0 failing scenarios
+</system-out>
+	</testcase>
+	<testcase name="suite_allocation_probe_tests" classname="suite_allocation_probe_tests" time="0.104255" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>allocation_probe_tests: 26 checks passed
+</system-out>
+	</testcase>
+	<testcase name="suite_primitives_tests" classname="suite_primitives_tests" time="0.125567" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>saw 4987 Hz @ 44100: inharmonic energy BLEP -24.0 dB, naive -8.1 dB
+primitives tests passed
+</system-out>
+	</testcase>
+	<testcase name="suite_effects_golden_tests" classname="suite_effects_golden_tests" time="1.41026" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>effects golden tests passed (26 renders)
+</system-out>
+	</testcase>
+	<testcase name="suite_drums_legacy_golden_tests" classname="suite_drums_legacy_golden_tests" time="7.17598" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>legacy Drums module: 187 parameters
+block invariance defaults  64 vs 512: max |d| 0 (peak 0.569)
+block invariance tweaked   64 vs 512: max |d| 0 (peak 0.406)
+block invariance samples   64 vs 512: max |d| 0 (peak 0.541)
+block invariance dense     64 vs 512: max |d| 0 (peak 1.04)
+block invariance internal  64 vs 512: max |d| 0 (peak 0.962)
+legacy Drums golden corpus: 54 scenarios, 540 bus rows, all deterministic
+</system-out>
+	</testcase>
+	<testcase name="suite_drums_product_tests" classname="suite_drums_product_tests" time="17.5487" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>VOX Drums product tests passed
+</system-out>
+	</testcase>
+	<testcase name="suite_drums_sample_tests" classname="suite_drums_sample_tests" time="4.96851" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>VOX Drums sample tests passed
+</system-out>
+	</testcase>
+	<testcase name="suite_drums_kit_engine_tests" classname="suite_drums_kit_engine_tests" time="7.08796" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>VOX Drums kit engine tests passed
+</system-out>
+	</testcase>
+	<testcase name="suite_drums_kit_parity_tests" classname="suite_drums_kit_parity_tests" time="23.7187" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>VOX Drums kit engine: 108 renders bit-identical to the DRM-00 reference on all 10 buses
+</system-out>
+	</testcase>
+	<testcase name="suite_drums_parity_tests" classname="suite_drums_parity_tests" time="36.1598" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>VOX Drums parity: 81 plugin renders bit-identical to the DRM-00 reference
+</system-out>
+	</testcase>
+	<testcase name="suite_boundaries" classname="suite_boundaries" time="0.188297" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>-- suite boundaries: ok
+</system-out>
+	</testcase>
+	<testcase name="suite_shell_tests_syn" classname="suite_shell_tests_syn" time="1.16374" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>VOX Trance Synthesis shell tests passed
+</system-out>
+	</testcase>
+	<testcase name="suite_shell_tests_drm" classname="suite_shell_tests_drm" time="26.6922" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>VOX Drums shell tests passed
+</system-out>
+	</testcase>
+	<testcase name="suite_shell_tests_fx" classname="suite_shell_tests_fx" time="1.73778" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>VOX FX shell tests passed
+</system-out>
+	</testcase>
+	<testcase name="suite_vst3_host_tests" classname="suite_vst3_host_tests" time="0.466615" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>[VOX Trance Synthesis] no display: editor not opened through the host
+[VOX Drums] no display: editor not opened through the host
+[VOX FX] no display: editor not opened through the host
+VST3 host tests passed (3 bundles)
+</system-out>
+	</testcase>
+	<testcase name="suite_moduleinfo" classname="suite_moduleinfo" time="0.0050314" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>-- VOX Trance Synthesis: ABCDEF019182FAEB556C567856785453
+-- VOX Drums: ABCDEF019182FAEB556C567856784472
+-- VOX FX: ABCDEF019182FAEB556C567856784658
+</system-out>
+	</testcase>
+	<testcase name="suite_verify_juce_strict-pinned" classname="suite_verify_juce_strict-pinned" time="0.0169735" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>-- Found Git: /usr/bin/git (found version "2.39.5")
+-- JUCE commit verified: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+-- case strict-pinned: accepted
+</system-out>
+	</testcase>
+	<testcase name="suite_verify_juce_strict-wrong-commit" classname="suite_verify_juce_strict-wrong-commit" time="0.0176762" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>-- Found Git: /usr/bin/git (found version "2.39.5")
+CMake Error at /home/user/vox-electronic-engine/cmake/suite/VerifyPinnedSource.cmake:24 (message):
+  JUCE at
+  /home/user/vox-electronic-engine/build-linux/tests/suite/verify-fixtures/strict-wrong-commit
+  is 'e8421f4db5e66e049d018bf73d0e2ad688857a6a', expected the pinned commit
+  e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+Call Stack (most recent call first):
+  /home/user/vox-electronic-engine/tests/suite/VerifyPinnedSourceCase.cmake:30 (vox_verify_pinned_source)
+
+
+</system-out>
+	</testcase>
+	<testcase name="suite_verify_juce_strict-no-metadata" classname="suite_verify_juce_strict-no-metadata" time="0.00809003" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>-- Found Git: /usr/bin/git (found version "2.39.5")
+CMake Error at /home/user/vox-electronic-engine/cmake/suite/VerifyPinnedSource.cmake:31 (message):
+  JUCE source cannot be verified
+  (/home/user/vox-electronic-engine/build-linux/tests/suite/verify-fixtures/strict-no-metadata
+  has no git metadata); VOX_STRICT_DEPENDENCIES=ON refuses unverifiable
+  sources
+Call Stack (most recent call first):
+  /home/user/vox-electronic-engine/tests/suite/VerifyPinnedSourceCase.cmake:30 (vox_verify_pinned_source)
+
+
+</system-out>
+	</testcase>
+	<testcase name="suite_verify_juce_relaxed-no-metadata" classname="suite_verify_juce_relaxed-no-metadata" time="0.00787401" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>-- Found Git: /usr/bin/git (found version "2.39.5")
+CMake Warning at /home/user/vox-electronic-engine/cmake/suite/VerifyPinnedSource.cmake:34 (message):
+  JUCE source NOT verified
+  (/home/user/vox-electronic-engine/build-linux/tests/suite/verify-fixtures/relaxed-no-metadata
+  has no git metadata).  Not acceptable for CI or release; configure with
+  -DVOX_STRICT_DEPENDENCIES=ON there.
+Call Stack (most recent call first):
+  /home/user/vox-electronic-engine/tests/suite/VerifyPinnedSourceCase.cmake:30 (vox_verify_pinned_source)
+
+
+-- case relaxed-no-metadata: accepted
+</system-out>
+	</testcase>
+	<testcase name="suite_verify_juce_relaxed-wrong-commit" classname="suite_verify_juce_relaxed-wrong-commit" time="0.0179193" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>-- Found Git: /usr/bin/git (found version "2.39.5")
+CMake Error at /home/user/vox-electronic-engine/cmake/suite/VerifyPinnedSource.cmake:24 (message):
+  JUCE at
+  /home/user/vox-electronic-engine/build-linux/tests/suite/verify-fixtures/relaxed-wrong-commit
+  is 'e8421f4db5e66e049d018bf73d0e2ad688857a6a', expected the pinned commit
+  e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8
+Call Stack (most recent call first):
+  /home/user/vox-electronic-engine/tests/suite/VerifyPinnedSourceCase.cmake:30 (vox_verify_pinned_source)
+
+
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_noise_riser_tests" classname="suite_fx_noise_riser_tests" time="2.44147" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>rate 44100 reference max error 3.7252903e-09 relative RMS 3.5186314e-08 spectral-difference ratio 751.553
+rate 48000 reference max error 3.7252903e-09 relative RMS 3.54426858e-08 spectral-difference ratio 786.570
+rate 96000 reference max error 3.7252903e-09 relative RMS 5.15886981e-08 spectral-difference ratio 922.651
+128 samples 44100 Hz 1 voices: p50 11.04 p95 21.39 p99 28.85 max 45.81 us
+128 samples 44100 Hz 8 voices: p50 54.45 p95 88.69 p99 121.47 max 170.59 us
+128 samples 44100 Hz 9 voices: p50 60.57 p95 86.33 p99 120.09 max 141.29 us
+128 samples 48000 Hz 1 voices: p50 10.93 p95 15.04 p99 30.62 max 43.08 us
+128 samples 48000 Hz 8 voices: p50 54.44 p95 86.63 p99 131.46 max 140.46 us
+128 samples 48000 Hz 9 voices: p50 60.52 p95 81.55 p99 101.35 max 114.14 us
+128 samples 96000 Hz 1 voices: p50 10.99 p95 11.59 p99 30.56 max 50.44 us
+128 samples 96000 Hz 8 voices: p50 54.46 p95 72.09 p99 83.45 max 123.01 us
+128 samples 96000 Hz 9 voices: p50 60.53 p95 108.66 p99 133.19 max 135.91 us
+FX noise riser: 0 failure(...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_automation_tests" classname="suite_fx_automation_tests" time="0.0381047" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX automation contract: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_processor_tests" classname="suite_fx_processor_tests" time="3.87224" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>[FX processor] JUCE initialization
+[FX processor] layer solo and synchronized cursor
+[FX processor] offline host monitor isolation
+[FX processor] in-place bounce effect history and audition priority
+[FX processor] External granular preview under repeated MIDI and Pattern pressure
+[FX processor] Layer drag across host restore
+[FX processor] Motion history rollover and non-Motion host restore
+[FX processor] Pattern clipboard during restore and editor recreation
+[FX processor] timeline viewport keyboard and selection
+[FX processor] WAV export across editor close and recreation
+[FX processor] WAV export pending host save, cancellation and processor unload
+[FX processor] MIDI export lifecycle and picker reentry
+[FX processor] prepared WAV and MIDI drag lifecycle
+[FX processor] expired drag snapshot and explicit recovery
+[FX processor] host Transition clock matrix and diagnostics
+[FX processor] measured serial FX tail and route
+[FX processor] capture parity
+[FX processor] Glitch source authoring, state and scope
+[F...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_timeline_tests" classname="suite_fx_timeline_tests" time="0.206462" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX timeline: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_bar_event_tests" classname="suite_fx_bar_event_tests" time="0.952022" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX bar event: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_layer_tests" classname="suite_fx_layer_tests" time="0.0148526" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX layers: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_program_bridge_tests" classname="suite_fx_program_bridge_tests" time="0.0383091" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX Program bridge: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_downlifter_tests" classname="suite_fx_downlifter_tests" time="0.141596" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX downlifter: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_shepard_tests" classname="suite_fx_shepard_tests" time="0.201671" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>44100 Hz Shepard energy 21.1286 max step 0.0021761053
+48000 Hz Shepard energy 22.997113 max step 0.0019998108
+96000 Hz Shepard energy 45.994205 max step 0.0010001119
+FX Shepard: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_impact_tests" classname="suite_fx_impact_tests" time="0.297524" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX impact: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_whoosh_tests" classname="suite_fx_whoosh_tests" time="0.153321" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX whoosh: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_laser_tests" classname="suite_fx_laser_tests" time="0.0787646" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX laser: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_squelch_tests" classname="suite_fx_squelch_tests" time="0.526059" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX squelch: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_metallic_tests" classname="suite_fx_metallic_tests" time="0.91647" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX metallic: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_texture_tests" classname="suite_fx_texture_tests" time="0.334682" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX texture: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_formant_tests" classname="suite_fx_formant_tests" time="0.688802" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX formant: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_effect_tail_tests" classname="suite_fx_effect_tail_tests" time="2.33686" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>44100 Hz reverb only                          audible tail  0.353 s, last nonzero  1.337 s, peak 0.4477, final second 0
+44100 Hz tempo delay max feedback             audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+44100 Hz free delay max feedback              audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+44100 Hz reverb into slow delay into reverb   audible tail 11.244 s, last nonzero 12.213 s, peak 0.3622, final second 0
+44100 Hz four reverbs                         audible tail  0.667 s, last nonzero  1.853 s, peak 0.3321, final second 0
+48000 Hz reverb only                          audible tail  0.353 s, last nonzero  1.337 s, peak 0.4446, final second 0
+48000 Hz tempo delay max feedback             audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+48000 Hz free delay max feedback              audible tail 10.050 s, last nonzero 10.050 s, peak 0.5000, final second 0
+48000 Hz reverb into slow delay into reverb   audible tail 11.24...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_nonlinear_alias_tests" classname="suite_fx_nonlinear_alias_tests" time="0.375478" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>44100 Hz f0  1838.4 amt 0.5: direct tanh 0.0000 (-49.5 dB), ADAA Drive 0.0000 (-54.9 dB), pre-change fold 0.0112 (-19.5 dB), shipping fold 0.0112 (-19.5 dB)
+44100 Hz f0  1838.4 amt 1.0: direct tanh 0.0015 (-28.2 dB), ADAA Drive 0.0004 (-34.1 dB), pre-change fold 0.1233 (- 9.1 dB), shipping fold 0.1233 (- 9.1 dB)
+44100 Hz f0  4594.6 amt 0.5: direct tanh 0.0029 (-25.4 dB), ADAA Drive 0.0008 (-31.0 dB), pre-change fold 0.8652 (- 0.6 dB), shipping fold 0.8652 (- 0.6 dB)
+44100 Hz f0  4594.6 amt 1.0: direct tanh 0.0431 (-13.7 dB), ADAA Drive 0.0109 (-19.6 dB), pre-change fold 0.8684 (- 0.6 dB), shipping fold 0.8683 (- 0.6 dB)
+44100 Hz f0  7350.9 amt 0.5: direct tanh 0.0137 (-18.6 dB), ADAA Drive 0.0042 (-23.8 dB), pre-change fold 1.0000 (- 0.0 dB), shipping fold 1.0000 (- 0.0 dB)
+44100 Hz f0  7350.9 amt 1.0: direct tanh 0.1303 (- 8.9 dB), ADAA Drive 0.0397 (-14.0 dB), pre-change fold 0.9041 (- 0.4 dB), shipping fold 0.9041 (- 0.4 dB)
+48000 Hz f0  2001.0 amt 0.5: direct tanh 0.0000 (-49.5 dB), ADAA Drive 0.0000 (-54...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_family_differentiation_tests" classname="suite_fx_family_differentiation_tests" time="1.21474" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>closest families: whoosh / metallic distance 1.331
+riser       keyboard level spread 0.0 dB
+downlifter  keyboard level spread 0.1 dB
+shepard     keyboard level spread 1.1 dB
+impact      keyboard level spread 0.0 dB
+whoosh      keyboard level spread 0.2 dB
+laser       keyboard level spread 0.1 dB
+squelch     keyboard level spread 3.8 dB
+metallic    keyboard level spread 5.0 dB
+texture     keyboard level spread 3.6 dB
+formant     keyboard level spread 2.8 dB
+glitch      keyboard level spread 1.9 dB
+granular    keyboard level spread 1.2 dB
+formant note 36 492 Hz best contrast 12.2 dB
+formant note 36 2980 Hz best contrast 6.3 dB
+formant note 60 492 Hz best contrast 7.0 dB
+formant note 60 2980 Hz best contrast 6.3 dB
+formant note 84 492 Hz best contrast 19.6 dB
+formant note 84 2980 Hz best contrast 6.1 dB
+FX family differentiation: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_program_codec_tests" classname="suite_fx_program_codec_tests" time="0.0270366" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX Program codec: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_playback_mode_tests" classname="suite_fx_playback_mode_tests" time="0.0698273" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX playback modes and note ownership: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_curve_trajectory_tests" classname="suite_fx_curve_trajectory_tests" time="0.0526614" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX curve trajectories: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_program_store_tests" classname="suite_fx_program_store_tests" time="0.405227" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX Program store: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_callback_benchmark" classname="suite_fx_callback_benchmark" time="2.33799" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>44100 riser 8 events x 4 layers: p50 278.71 p95 312.03 p99 333.63 max 369.50 us
+44100 downlifter 8 events x 4 layers: p50 217.26 p95 260.57 p99 406.32 max 417.29 us
+44100 shepard 8 events x 4 layers: p50 614.80 p95 643.98 p99 650.52 max 671.58 us
+44100 impact 8 events x 4 layers: p50 261.12 p95 285.07 p99 302.69 max 303.64 us
+44100 whoosh 8 events x 4 layers: p50 251.06 p95 280.77 p99 286.61 max 289.71 us
+44100 laser 8 events x 4 layers: p50 213.90 p95 240.46 p99 246.60 max 338.91 us
+44100 squelch 8 events x 4 layers: p50 257.38 p95 279.58 p99 295.50 max 317.00 us
+44100 metallic 8 events x 4 layers: p50 593.36 p95 616.21 p99 621.16 max 622.67 us
+44100 texture 8 events x 4 layers: p50 307.48 p95 331.86 p99 337.96 max 339.81 us
+44100 formant 8 events x 4 layers: p50 448.87 p95 470.03 p99 471.99 max 472.07 us
+44100 glitch 8 events x 4 layers: p50 280.42 p95 299.24 p99 303.51 max 310.24 us
+44100 granular 8 events x 4 layers: p50 151.50 p95 165.79 p99 173.31 max 176.02 us
+48000 riser 8 events x 4 layers: p50 145.9...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_modulation_tests" classname="suite_fx_modulation_tests" time="0.00203135" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX modulation primitives: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_glitch_tests" classname="suite_fx_glitch_tests" time="0.0946973" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>custom Glitch: open-slice energy 0.0542287, reverse-forward difference 11.0697508
+FX glitch: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_granular_tests" classname="suite_fx_granular_tests" time="0.450004" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX granular: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_generator_tests" classname="suite_fx_generator_tests" time="0.237034" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX generator: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_pattern_tests" classname="suite_fx_pattern_tests" time="0.00879721" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX trigger patterns: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_offline_render_tests" classname="suite_fx_offline_render_tests" time="0.193668" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX offline WAV: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_effects_tests" classname="suite_fx_effects_tests" time="0.445355" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>free Delay sweep 44100 Hz: relative staircase -17.52 dB, fractional -34.00 dB
+free Delay boundary 44100 Hz speed 0.003: 11 crossings, old entry/exit residual 0.981213 / 0.251127, max new 0.002258 samples
+free Delay boundary 44100 Hz speed 0.031: 11 crossings, old entry/exit residual 0.966833 / 0.251127, max new 0.002258 samples
+free Delay first-echo boundary 44100 Hz: old derivative residual 0.000492209, measured new 0.000001116
+free Delay sweep 48000 Hz: relative staircase -17.63 dB, fractional -34.10 dB
+free Delay boundary 48000 Hz speed 0.003: 13 crossings, old entry/exit residual 0.982462 / 0.247913, max new 0.002079 samples
+free Delay boundary 48000 Hz speed 0.031: 13 crossings, old entry/exit residual 0.967004 / 0.247913, max new 0.002079 samples
+free Delay first-echo boundary 48000 Hz: old derivative residual 0.000490649, measured new 0.000001008
+free Delay sweep 96000 Hz: relative staircase -17.38 dB, fractional -33.89 dB
+free Delay boundary 96000 Hz speed 0.003: 25 crossings, old entry/exit residual ...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_effects_benchmark" classname="suite_fx_effects_benchmark" time="3.31906" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>96k Shepard 8x4 + 4x effect 0: p50 586.85 p95 959.56 p99 1201.51 max 1255.02 us; checksum -0.249275
+96k Shepard 8x4 + 4x effect 1: p50 597.72 p95 1055.32 p99 1102.43 max 1142.82 us; checksum 0.338010
+96k Shepard 8x4 + 4x effect 2: p50 636.84 p95 1123.98 p99 1166.29 max 1196.20 us; checksum -6.918770
+96k Shepard 8x4 + 4x effect 3: p50 625.93 p95 652.76 p99 683.86 max 744.23 us; checksum 12.919668
+96k Shepard 8x4 + 4x effect 4: p50 613.99 p95 656.08 p99 709.81 max 786.92 us; checksum -0.332948
+96k Shepard 8x4 + 4x effect 5: p50 606.38 p95 767.71 p99 919.19 max 1081.40 us; checksum -0.662651
+96k Shepard 8x4 + 4x effect 6: p50 595.44 p95 726.33 p99 1113.41 max 1350.94 us; checksum -0.089174
+96k Shepard 8x4 + 4x effect 7: p50 595.48 p95 656.93 p99 857.53 max 970.38 us; checksum 0.052080
+96k Shepard 8x4 + 4x effect 8: p50 615.96 p95 645.87 p99 673.71 max 780.69 us; checksum 1.327087
+96k Shepard 8x4 + 4x effect 9: p50 599.61 p95 677.02 p99 1102.04 max 1522.32 us; checksum 0.014185
+96k Shepard 8x4 + 4x effect 10: p50...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_pattern_codec_tests" classname="suite_fx_pattern_codec_tests" time="0.00319109" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX pattern codec: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_pattern_playback_tests" classname="suite_fx_pattern_playback_tests" time="0.00690119" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX pattern playback scheduling: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_pattern_grid_tests" classname="suite_fx_pattern_grid_tests" time="0.00542199" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX pattern grid: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_pattern_swing_tests" classname="suite_fx_pattern_swing_tests" time="0.00173789" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX pattern swing: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_macro_routing_tests" classname="suite_fx_macro_routing_tests" time="0.00477383" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX macro routing: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_generator_state_tests" classname="suite_fx_generator_state_tests" time="0.00177761" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX generator state: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_file_export_tests" classname="suite_fx_file_export_tests" time="0.0489341" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX WAV create-only: expected bytes=21650 sha256=263ee0ae0e7826eaef86e20a8f35da1b7820c5df03d6b8a7455dfe7ece92b526
+FX SMF create-only: expected bytes=51 sha256=f43d09a540cb14cef8ee5029b1d575ec7e7574580c05d476221b13f8464eb84b
+FX file export: cross-device failure checked
+FX file export: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_sample_store_tests" classname="suite_fx_sample_store_tests" time="0.0784146" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX sample ownership: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_sample_decode_tests" classname="suite_fx_sample_decode_tests" time="0.0179735" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX sample WAV decode: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_sample_granular_tests" classname="suite_fx_sample_granular_tests" time="0.172899" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>granular travel ramp sums: backwards 7.137864, stationary 28.602086, forwards 50.066306
+FX sample granular ownership: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_sample_reference_tests" classname="suite_fx_sample_reference_tests" time="0.00252858" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX sample reference state: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_sample_controller_tests" classname="suite_fx_sample_controller_tests" time="0.583148" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>Wave B external asset cue voxfx.sweep.vellum-coil peak 0.001632 source SHA-256 6737b0be62f5d6ebdf33f82bef880ad0cbd758ec5dd31eb967650f2f84eb154a
+Wave B external asset cue voxfx.atmosphere.kiln-choir peak 0.003025 source SHA-256 99476406853eb4a42733b90157786a80fa064a21aa747b2b39aef181743e654f
+FX sample controller: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_transport_tests" classname="suite_fx_transport_tests" time="0.00143701" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX transport tracking: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_pattern_benchmark" classname="suite_fx_pattern_benchmark" time="1.1862" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>44100 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 904.92 p95 934.54 p99 1002.00 max 1377.03 us; accepted 929 dropped 0 peak 0.279 clipped 0 checksum -54.215874
+48000 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 908.38 p95 975.25 p99 1071.80 max 1679.88 us; accepted 854 dropped 0 peak 0.279 clipped 0 checksum -91.196345
+96000 Hz 8x4 Shepard + 4 drive + max pattern @1000 BPM: p50 896.99 p95 1512.84 p99 1751.30 max 1982.98 us; accepted 427 dropped 0 peak 0.279 clipped 0 checksum -81.846593
+scheduler only full scan 48k 128 @137 BPM: p50 4.661 p95 7.205 p99 11.328 max 76.791 us; checksum 655856
+scheduler only bounded lookup 48k 128 @137 BPM: p50 0.090 p95 0.143 p99 0.222 max 35.779 us; checksum 655856
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_factory_candidates_tests" classname="suite_fx_factory_candidates_tests" time="53.8032" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>voxfx.impact.iron-drop 44100 Hz 119070 frames peak 0.020076 DC 0.0000287 mono/stereo RMS 0.99929 end5ms 0.0000000
+voxfx.impact.iron-drop 48000 Hz 129600 frames peak 0.020144 DC 0.0000286 mono/stereo RMS 0.99929 end5ms 0.0000000
+voxfx.impact.iron-drop 96000 Hz 259200 frames peak 0.019979 DC 0.0000277 mono/stereo RMS 0.99930 end5ms 0.0000000
+voxfx.riser.first-light 44100 Hz 350883 frames peak 0.017199 DC 0.0000013 mono/stereo RMS 0.99290 end5ms 0.0000000
+voxfx.riser.first-light 48000 Hz 381914 frames peak 0.016055 DC 0.0000013 mono/stereo RMS 0.99303 end5ms 0.0000000
+voxfx.riser.first-light 96000 Hz 763827 frames peak 0.015089 DC 0.0000014 mono/stereo RMS 0.99395 end5ms 0.0000000
+voxfx.fall.blue-hour 44100 Hz 555660 frames peak 0.017973 DC 0.0000000 mono/stereo RMS 0.99653 end5ms 0.0000000
+voxfx.fall.blue-hour 48000 Hz 604800 frames peak 0.018654 DC 0.0000000 mono/stereo RMS 0.99652 end5ms 0.0000000
+voxfx.fall.blue-hour 96000 Hz 1209600 frames peak 0.018378 DC 0.0000000 mono/stereo RMS 0.99622 end5ms 0.0000000
+...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_source_sound_tests" classname="suite_fx_source_sound_tests" time="0.14563" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX source sound: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_portable_preset_tests" classname="suite_fx_portable_preset_tests" time="0.053306" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX portable preset and comparison codecs: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_sound_graph_tests" classname="suite_fx_sound_graph_tests" time="0.859469" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>motion 44100 Hz 64 routes: peak 0.019922 DC 0.0001549 / 64 grains
+motion 48000 Hz 64 routes: peak 0.019241 DC 0.0001858 / 64 grains
+motion 96000 Hz 64 routes: peak 0.026175 DC 0.0001166 / 64 grains
+mixed nonlinear/tempo delay tail 44100 Hz: peak 0.2050317, tail 0.2050317, final peak 0.000000000
+mixed nonlinear/moving free delay tail 44100 Hz: peak 0.1601616, tail 0.1601616, final peak 0.000000000
+mixed nonlinear/tempo delay tail 48000 Hz: peak 0.2063064, tail 0.2063064, final peak 0.000000000
+mixed nonlinear/moving free delay tail 48000 Hz: peak 0.1604605, tail 0.1604605, final peak 0.000000000
+mixed nonlinear/tempo delay tail 96000 Hz: peak 0.2039244, tail 0.2039244, final peak 0.000000000
+mixed nonlinear/moving free delay tail 96000 Hz: peak 0.1612411, tail 0.1612411, final peak 0.000000000
+FX sound graph/deterministic routes: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_preset_library_tests" classname="suite_fx_preset_library_tests" time="0.0160726" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>FX user library and preview: 0 failure(s)
+</system-out>
+	</testcase>
+	<testcase name="suite_fx_runtime_stress_tests" classname="suite_fx_runtime_stress_tests" time="4.98236" status="run">
+		<properties>
+			<property name="cmake_labels" value="suite"/>
+		</properties>
+		<system-out>Allocation probe available: yes
+Lock probe: platform synchronization and wait entry points
+Random MIDI without Pattern
+44100 Hz 64 samples 1 initial voices: peak 0.031438 DC 0.0008636 grains 48 alloc 0 lock 0 wait 0 wall p50 136.44 p95 266.21 p99 341.26 p99.9 345.17 max 345.17 us
+  functional: finite_output=1 midi_consumed=1 peak_in_range=1 dc_in_range=1 grain_limit=1 voice8_grain_invariant=1 functional_pass=1 reasons=NONE
+44100 Hz 64 samples 4 initial voices: peak 0.031989 DC 0.0002291 grains 64 alloc 0 lock 0 wait 0 wall p50 160.02 p95 270.64 p99 319.23 p99.9 364.37 max 364.37 us
+  functional: finite_output=1 midi_consumed=1 peak_in_range=1 dc_in_range=1 grain_limit=1 voice8_grain_invariant=1 functional_pass=1 reasons=NONE
+44100 Hz 64 samples 8 initial voices: peak 0.041631 DC 0.0002706 grains 64 alloc 0 lock 0 wait 0 wall p50 167.78 p95 267.79 p99 304.87 p99.9 323.12 max 323.12 us
+  functional: finite_output=1 midi_consumed=1 peak_in_range=1 dc_in_range=1 grain_limit=1 voice8_grain_invariant=1 functional_p...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

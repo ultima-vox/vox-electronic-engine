@@ -12,7 +12,7 @@ RC, merge or release evidence.
 ## 1. Invariants held at this checkpoint
 
 Verified by `git diff --stat 2e6b0c70..1625719` — five files only
-(`Effects.h`, `Generator.h`, `FxProgramCodecTests.cpp`,
+(`Effects.h`, `FxNonlinearAliasTests.cpp`, `FxProgramCodecTests.cpp`,
 `FxPortablePresetTests.cpp`, `FxGeneratorTests.cpp`) plus this documentation
 tranche. Specifically unchanged:
 
@@ -40,11 +40,13 @@ tranche. Specifically unchanged:
 | Frozen 232 / 0 inventory | **HELD** | §1 above |
 | Exact-SHA test evidence for every claim | **DONE** | §5 tables below |
 
-## 3. Outstanding product requirements — completion status (task 5)
+## 3. Outstanding product requirements — local implementation status (task 5)
 
-Local implementation audit against the Unified Production Specification and the
-requirement map, with code-level evidence (this is implementation evidence
-only, never host evidence):
+This is an audit of **local implementation** against the Unified Production
+Specification and the requirement map — it is **not a claim that all product
+requirements are complete**: Windows/DAW/listening/owner gates below remain
+open, and no requirement is promoted to qualified by this audit. Code-level
+evidence only, never host evidence:
 
 | Requirement | Local implementation status | Evidence / gap |
 |---|---|---|
@@ -95,72 +97,103 @@ only, never host evidence):
 4. Windows DAW/create-only export acceptance (owner/Windows gate).
 5. No Steinberg validator execution at any SHA in this checkpoint.
 
-## 5. Executed test evidence at `1625719` (executable, local Linux)
+## 5. Executed test evidence (executable, local Linux; SHA-attributed)
 
 Tooling: `g++ 12.2.0`, `-std=c++20 -O2 -Wall -Wextra -pedantic`; JUCE-based
 suites via CMake/Ninja against JUCE `9.0.1` at pinned commit
 `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8` (strict suite pin verified by
-`vox_verify_pinned_source`). Commands are the harness recipes in §WAVEFOLD
-plus the project’s `cmake -S . -B build-linux -G Ninja -DVOX_BUILD_SUITE=ON
--DVOX_STRICT_DEPENDENCIES=ON` flow; full `ctest` output for the CMake-driven
-suites is recorded in the PR response text accompanying this checkpoint.
+`vox_verify_pinned_source`). Per TL comment
+[#7212562366](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7212562366)
+each result is attributed to the SHA it was executed at, and the raw logs
+are retained:
 
-| Suite | Result |
-|---|---|
-| FxNonlinearAliasTests (+ ASan/UBSan) | `0 failure(s)` |
-| FxEffectsTests / FxSoundGraphTests / FxEffectTailTests / FxMacroRoutingTests | `0 failure(s)` each |
-| FxProgramCodecTests (v10 migration) | `0 failure(s)` |
-| FxPortablePresetTests / FxGeneratorTests / FxGeneratorStateTests | `0 failure(s)` each |
-| FxSourceSoundTests / FxOfflineRenderTests / FxProgramStoreTests / FxPlaybackModeTests / FxBarEventTests | `0 failure(s)` each |
-| Pattern ×4 / Factory candidates / Sample store·reference·granular / Transport / CurveTrajectory / FamilyDifferentiation | `0 failure(s)` each (11 suites) |
-| JUCE-dependent suites (FileExport, SampleDecode, Editor…) | via CMake `ctest` — see PR response |
+- **Standalone harness runs — executed at code SHA `1625719`** (recipes in
+  WAVEFOLD doc §3): the FX suites in the table below.
+- **Full `ctest -L suite` — executed at docs HEAD `8ebdec0`** (clean tree;
+  its code tree is byte-identical to `1625719`, the delta is documentation
+  only): `100% tests passed, 0 failed, 0 skipped out of 78`, 130.62 s.
+  Retained artifacts:
+  - raw console log: `evidence/ctest-suite-8ebdec0-20261127.log`
+  - JUnit XML: `evidence/ctest-suite-8ebdec0-20261127.xml`
+  - build/dependency/tree provenance:
+    `evidence/ctest-suite-8ebdec0-20261127.provenance.txt`
+  - CTest `LastTest.log` remains in `build-linux/Testing/Temporary/`.
 
-Frozen-item spot checks at `1625719`: `parameters.csv` byte-identical to
-parent; `products/fx/content/` byte-identical to parent; no file outside
-`products/fx/engine`, `tests/suite`, `docs/ultima-vox-music/fx` changed.
+| Suite | Result | Executed at |
+|---|---|---|
+| FxNonlinearAliasTests (+ ASan/UBSan) | `0 failure(s)` | `1625719` |
+| FxEffectsTests / FxSoundGraphTests / FxEffectTailTests / FxMacroRoutingTests | `0 failure(s)` each | `1625719` |
+| FxProgramCodecTests (v10 migration) | `0 failure(s)` | `1625719` |
+| FxPortablePresetTests / FxGeneratorTests / FxGeneratorStateTests | `0 failure(s)` each | `1625719` |
+| FxSourceSoundTests / FxOfflineRenderTests / FxProgramStoreTests / FxPlaybackModeTests / FxBarEventTests | `0 failure(s)` each | `1625719` |
+| Pattern ×4 / Factory candidates / Sample store·reference·granular / Transport / CurveTrajectory / FamilyDifferentiation | `0 failure(s)` each (11 suites) | `1625719` |
+| All 78 `suite`-labelled tests incl. JUCE-dependent FileExport, SampleDecode, VST3 host, identity/provenance | `78/78 passed`, `--no-tests=error` | `8ebdec0` |
+
+These are developer-reported local Linux results (TL: not independently
+executed). Frozen-item spot checks at `1625719`: `parameters.csv`
+byte-identical to parent; `products/fx/content/` byte-identical to parent;
+no file outside `products/fx/engine`, `tests/suite`,
+`docs/ultima-vox-music/fx` changed.
 
 ## 6. Integrated Windows x64 engineering candidate — preparation receipt (task 6)
 
-Per [INTEGRATED_CANDIDATE_PLAN_20261119](INTEGRATED_CANDIDATE_PLAN_20261119.md):
+Per [INTEGRATED_CANDIDATE_PLAN_20261119](INTEGRATED_CANDIDATE_PLAN_20261119.md)
+and TL comment
+[#7212562366](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7212562366):
 
-- **Exact source candidate**: `1625719fd5755fa1516d058b0b272a963aec33c9`
-  (Arena product branch). Branch proposal per TL: a separate product
-  integration branch cut from exact PR #156 head `5c2f122` receiving these
-  slices as new commits — **no history rewrite** — plus the tooling-only
-  snapshot branch at `ef0f975` carried as-is.
+- **Exact source**: `8ebdec0a9a3645d9cdf7907fe0b6216eb5b62f85`, independently
+  verified by the TL as two commits ahead of dedicated product base
+  `2e6b0c70`, 11 changed files; PR #170 remains `2e6b0c7`. **Lineage: the
+  product branch already descends from #156 — no cherry-pick or rebase is
+  needed merely to reconstruct lineage**, and no history rewrite occurs.
 - **Preflight executed (parse-only, no PowerShell execution, no CI)**:
-  `python3 .github/scripts/prepare-fx-windows-preflight.py /tmp/fx-preflight-probe`
-  → `Checkout 1625719…; 16 PowerShell run blocks extracted, not executed;
+  `python3 .github/scripts/prepare-fx-windows-preflight.py` at `8ebdec0`
+  → `Checkout 8ebdec0…; 16 PowerShell run blocks extracted, not executed;
   SuiteIdentity.cmake matches workflow bundle names: VOX Trance Synthesis,
   VOX Drums, VOX FX`. The Windows-side `Test-FxWindowsPreflight.ps1` still
-  requires Windows PowerShell 5.1 on the intended runner (not run).
+  requires **actual Windows PowerShell 5.1 on the intended runner** (not
+  run).
+- **Run proposal**: one exact-source Windows x64 engineering run is proposed
+  in
+  [WINDOWS_RUN_PROPOSAL_20261127.md](WINDOWS_RUN_PROPOSAL_20261127.md) —
+  HAMUNAPTRA self-hosted only (no hosted fallback), clean Release,
+  full-suite CTest, Steinberg validator on all three bundles, SHA
+  manifests, CDB/failure diagnostics, installable artifacts if available.
 - **Build definition (from `.github/workflows/suite.yml`, not run here)**:
-  `cmake -S . -B build -G Ninja -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF
-  -DVOX_STRICT_DEPENDENCIES=ON` on windows-2022 with Release CMake preset,
-  then `ctest --test-dir build -C Release -L suite`, followed by the
-  Steinberg validator step and the required-inventory check over the three
-  `*.vst3` bundles (`VOX FX.vst3` first).
+  `cmake -S . -B build-suite -A x64 -DVOX_BUILD_SUITE=ON
+  -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON
+  -DFETCHCONTENT_SOURCE_DIR_JUCE=<pinned JUCE> -DVOX_FX_DIAGNOSTIC_SYMBOLS=ON`
+  (Visual Studio 17 2022 generator), `cmake --build … --config Release
+  --clean-first --parallel`, then `ctest --test-dir build-suite -C Release
+  -L suite --no-tests=error --timeout 180 --output-on-failure
+  --output-junit …`, then the Steinberg validator over all three
+  `*.vst3` bundles.
 - **Provenance required in the receipt**: exact source SHA, JUCE
   `e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8`, VST3 SDK
-  `v3.8.0_build_66`, CMake/Ninja/MSVC versions, bundle inventory SHA-256s,
-  validator log, CTest log.
-- **Status: PREPARED, NOT DISPATCHED.** Queue contention and the standing
-  HOLD mean no Windows CI is triggered from this branch; dispatch requires
-  separate authorization.
+  `v3.8.0_build_66` / `9fad9770f2ae8542ab1a548a68c1ad1ac690abe0`,
+  MSVC/CMake/CTest versions, bundle inventory SHA-256s, validator log,
+  CTest log/JUnit.
+- **Status: PREPARED, NOT DISPATCHED.** No Windows CI is triggered from
+  this branch; dispatch requires explicit owner authorization, and no PR
+  creation or ref move happens without CI routing coordination. Existing
+  #156/#170 HOLD/NO MERGE stands.
 
 ## 7. Release evidence ledger (§21.4)
 
 The exact-HEAD matrix remains the
 [ENGINEERING_REQUIREMENT_MAP_20261122](ENGINEERING_REQUIREMENT_MAP_20261122.md)
-table (FX-T01…FX-T20). At this checkpoint:
+table (FX-T01…FX-T20), with Unified TZ numbering per TL comment #7212562366.
+At this checkpoint:
 
-- **FX-T04** (if tracked as nonlinear acceptance): local Linux evidence now
-  complete per WAVEFOLD doc; Windows/audio/manual columns remain
-  `open`.
-- **FX-T17** (codec/FPRG): local migration evidence complete; Windows column
-  open.
-- **FX-T18**: unchanged — prior deadline misses stand; no new measurements.
-- **FX-T20**: unchanged — no validator run at any SHA in this checkpoint.
+- **FX-T09** (nonlinear quality): local Linux evidence now complete per
+  WAVEFOLD doc; Windows/audio/manual columns remain `open`.
+- **FX-T16** (codec/state, FPRG v10): local migration evidence complete;
+  Windows column open.
+- **FX-T17** (Windows validator): unchanged — no validator run at any SHA
+  in this checkpoint; covered by the proposed exact-source run.
+- **FX-T18**: unchanged — prior deadline misses stand; no new measurements;
+  independent of the proposed engineering run.
+- **FX-T20** (owner round): unchanged — no owner acceptance round held.
 - Every other row: unchanged from the requirement map; no row is promoted to
   qualified by this checkpoint.
 

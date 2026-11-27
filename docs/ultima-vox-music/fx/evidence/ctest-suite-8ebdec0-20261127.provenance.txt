@@ -1,0 +1,26 @@
+VOX FX suite CTest evidence — provenance
+date_utc: 2026-11-27T07:48:57Z
+git_head: 8ebdec0a9a3645d9cdf7907fe0b6216eb5b62f85
+git_tree: 2d94b82832c595c3b6bced388d95364a6f458bb7
+git_status: clean tree at run start (HEAD 8ebdec0); test binaries were built from this tree before the run; documentation/help-string edits in the correction tranche were made after the run started and do not affect the pre-built binaries
+branch: arena/2cb75bdc-vox-electronic-engine
+base: 2e6b0c70a29d1f0486fcc23d0410c48d0882e94f
+code_sha_equivalent: 1625719fd5755fa1516d058b0b272a963aec33c9 (products/ and tests/ byte-identical; delta to 8ebdec0 is documentation only)
+accepted_checkpoint: 8ebdec0a9a3645d9cdf7907fe0b6216eb5b62f85
+
+configure_command: cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DVOX_BUILD_SUITE=ON -DVOX_BUILD_LEGACY=OFF -DVOX_STRICT_DEPENDENCIES=ON -DFETCHCONTENT_SOURCE_DIR_JUCE=/home/user/deps/juce (plus environment include/feature flags recorded in build-linux/CMakeCache.txt CMAKE_CXX_FLAGS)
+build_command: cmake --build build-linux --parallel 2
+ctest_command: ctest --test-dir build-linux -C Release -L suite --no-tests=error --timeout 180 --output-on-failure --output-junit docs/ultima-vox-music/fx/evidence/ctest-suite-8ebdec0-20261127.xml
+ctest_result: 100% tests passed, 78/78, 0 failed, 0 skipped, 213.37 s
+
+cmake: cmake version 4.4.5
+ninja: 1.13.2.git.kitware.jobserver-pipe-1
+compiler: g++ (Debian 12.2.0-14+deb12u1) 12.2.0
+ctest: ctest version 4.4.5
+os: Linux 6.1.158+ x86_64
+juce_pin_verified_by_suite: e18f7f506c0b96f2c738a0bcd7fe6467a5005ad8 (suite_identity/suite_verify_juce tests passed)
+vst3sdk_local_clone_for_validator_prep: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0 (not used by this Linux ctest)
+raw_log: evidence/ctest-suite-8ebdec0-20261127.log
+junit: evidence/ctest-suite-8ebdec0-20261127.xml
+lasttest_log: build-linux/Testing/Temporary/LastTest.log
+note: developer-reported local Linux results; not independently executed; not Windows/DAW/listening evidence.
