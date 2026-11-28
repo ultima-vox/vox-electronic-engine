@@ -13,11 +13,25 @@ mod::Source sourceForControl(int id) noexcept {
     if(id==11)return mod::Source::random;
     return mod::Source::count;
 }
+constexpr const char* familyControlNames[12][3]{
+    {"Noise colour", "Sweep bias", "Exciter"},
+    {"Tone balance", "Fall motion", "Noise skirt"},
+    {"Partial spread", "Rotation", "Partial density"},
+    {"Body", "Pitch drop", "Noise hit"},
+    {"Air", "Doppler", "Delay mix"},
+    {"Beam body", "Sweep range", "Click"},
+    {"Resonance", "Sweep range", "Noise skirt"},
+    {"Mode spread", "Mode motion", "Strike density"},
+    {"Detune", "Texture motion", "Noise colour"},
+    {"Vowel spacing", "Vowel motion", "Exciter"},
+    {"Slice edge", "Read motion", "Slice level"},
+    {"Grain level", "Pitch motion", "Grain density"}
+};
 }
 GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     const char* names[]{"Style seed", "Active layers", "Intensity", "Energy", "Stereo", "Sound role"};
     for(std::size_t i=0;i<labels_.size();++i){labels_[i].setText(names[i],juce::dontSendNotification);addAndMakeVisible(labels_[i]);}
-    for(int i=0;i<6;++i)style_.addItem("Style " + juce::String(i+1),i+1);
+    for(int i=0;i<6;++i)style_.addItem(std::array<const char*,6>{"Psy Goa","Techno","Progressive","Ambient","Cinematic","Experimental"}[i],i+1);
     const char* roles[]{"Impact","Riser","Fall","Sweep","Zap","Rhythm","Atmosphere","Stinger"};
     for(int i=0;i<8;++i)role_.addItem(roles[i],i+1);
     role_.onChange=[this]{const auto id=role_.getSelectedId();if(id>0)(void)processor_.editGeneratorState([id](auto& state){state.role=static_cast<unsigned>(id-1);});};
@@ -30,39 +44,45 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     fullGenerate_.setTooltip("Generate the selected role, replacing only unlocked structural fields. Host automation is not changed.");
     fullMutate_.setTooltip("Deterministically vary the unlocked existing structural values at the current seed.");
     const auto doSound=[this](bool mutation){const bool applied=processor_.generateSound(mutation);
-        graphStatus_.setText(applied?"Sound graph updated · host values unchanged":"No structural change (check locks / seed)",juce::dontSendNotification);};
+        graphStatus_.setText(applied?u8("Sound graph updated · host values unchanged"):"No structural change (check locks / seed)",juce::dontSendNotification);};
     fullGenerate_.onClick=[doSound]{doSound(false);};fullMutate_.onClick=[doSound]{doSound(true);};
     for(auto* c:std::array<juce::Component*,5>{&graphLock_,&lockGroup_,&fullGenerate_,&fullMutate_,&graphStatus_})addAndMakeVisible(*c);
-    for(int i=1;i<=4;++i)complexity_.addItem(juce::String(i),i);
+    complexity_.addItem("1 layer",1);complexity_.addItem("2 layers",2);
+    complexity_.addItem("3 layers",3);complexity_.addItem("4 layers",4);
     style_.setTitle("Generator style seed");complexity_.setTitle("Generator active layers");
     style_.onChange=[this]{const auto value=style_.getSelectedId()-1;
         (void)processor_.editGeneratorState([value](generator::ControllerState& s){s.style=value;});};
     complexity_.onChange=[this]{const auto value=complexity_.getSelectedId();
         (void)processor_.editGeneratorState([value](generator::ControllerState& s){s.complexity=value;});};
-    auto configure=[this](juce::Slider& slider,const char* title){slider.setRange(0,1,.01);
-        slider.setTitle(title);slider.setSliderStyle(juce::Slider::LinearHorizontal);
-        slider.setTextBoxStyle(juce::Slider::TextBoxRight,false,50,24);addAndMakeVisible(slider);};
-    configure(intensity_,"Generator intensity");configure(energy_,"Generator energy");configure(stereo_,"Generator stereo spread");
-    intensity_.onValueChange=[this]{const auto v=static_cast<float>(intensity_.getValue());
+    for (auto* dial : { &intensity_, &energy_, &stereo_ }) dial->getSlider().setRange (0, 1, .01);
+    { const auto state=processor_.generatorState();
+      intensity_.getSlider().setValue(state.intensity,juce::dontSendNotification);
+      energy_.getSlider().setValue(state.energy,juce::dontSendNotification);
+      stereo_.getSlider().setValue(state.stereo,juce::dontSendNotification); }
+    intensity_.getSlider().onValueChange=[this]{const auto v=static_cast<float>(intensity_.getSlider().getValue());
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.intensity=v;});};
-    energy_.onValueChange=[this]{const auto v=static_cast<float>(energy_.getValue());
+    energy_.getSlider().onValueChange=[this]{const auto v=static_cast<float>(energy_.getSlider().getValue());
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.energy=v;});};
-    stereo_.onValueChange=[this]{const auto v=static_cast<float>(stereo_.getValue());
+    stereo_.getSlider().onValueChange=[this]{const auto v=static_cast<float>(stereo_.getSlider().getValue());
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.stereo=v;});};
-    addAndMakeVisible(style_);addAndMakeVisible(complexity_);addAndMakeVisible(close_);
+    // style_/complexity_/intensity_/energy_/stereo_ and fieldLocks_ are
+    // re-parented into the PERFORM Program-Generator module (reference
+    // composition); this overlay keeps role/graph locks and status.
+    addAndMakeVisible(close_);
     for(int i=0;i<4;++i)lockLayer_.addItem("Layer " + juce::String::charToString(static_cast<juce::juce_wchar>('A'+i)),i+1);
     lockLayer_.setSelectedId(1,juce::dontSendNotification);lockLayer_.setTitle("Layer for generator locks");
     lockLayer_.onChange=[this]{timerCallback();};addAndMakeVisible(lockLayer_);
     const char* lockNames[]{"Family","On","Time","Gain","Pan","Gain env","Pan env","Pitch env","Cutoff env","Filters","Transpose","Character"};
     const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve,generator::pitchCurve,generator::cutoffCurve,generator::filters,generator::transpose,generator::character};
     for(std::size_t i=0;i<fieldLocks_.size();++i){
-        auto& button=fieldLocks_[i];button.setButtonText(lockNames[i]);button.setTitle("Lock " + juce::String(lockNames[i]));
+        auto& button=fieldLocks_[i];button.setType(vox::ui::VoxButton::Type::Toggle);
+        button.setButtonText(lockNames[i]);button.setTitle("Lock " + juce::String(lockNames[i]));
         button.setTooltip("Preserve this field during Generate and Mutate");
         button.onClick=[this,i,bit=bits[i]]{const int layer=lockLayer_.getSelectedId()-1;if(layer<0||layer>=4)return;
             const bool locked=fieldLocks_[i].getToggleState();
             (void)processor_.editGeneratorState([layer,bit,locked](generator::ControllerState& s){
                 auto& mask=s.locks.layers[static_cast<std::size_t>(layer)];if(locked)mask|=bit;else mask&=~bit;});};
-        addAndMakeVisible(button);
+        // fieldLocks_ live in the PERFORM module; the overlay edits lockLayer_. 
     }
     close_.onClick=[this]{setVisible(false);};timerCallback();startTimerHz(15);
 }
@@ -73,8 +93,11 @@ void GeneratorPanel::paint(juce::Graphics& g) {
 void GeneratorPanel::resized() {
     auto area=getLocalBounds().reduced(10);close_.setBounds(area.removeFromBottom(26).removeFromRight(75));
     for(std::size_t i=0;i<labels_.size();++i){auto row=area.removeFromTop(31);labels_[i].setBounds(row.removeFromLeft(100));
-        switch(i){case 0:style_.setBounds(row);break;case 1:complexity_.setBounds(row);break;
-            case 2:intensity_.setBounds(row);break;case 3:energy_.setBounds(row);break;case 4:stereo_.setBounds(row);break;case 5:role_.setBounds(row);break;default:break;}}
+        // style_/complexity_/intensity_/energy_/stereo_ live in the PERFORM
+        // Program-Generator module now; the overlay must not re-position them.
+        switch(i){case 0:if(style_.getParentComponent()==this)style_.setBounds(row);break;
+            case 1:if(complexity_.getParentComponent()==this)complexity_.setBounds(row);break;
+            case 5:role_.setBounds(row);break;default:break;}}
     auto locks=area.removeFromTop(27);lockLayer_.setBounds(locks.removeFromLeft(100));
     const auto width=locks.getWidth()/4;for(std::size_t i=0;i<4;++i)fieldLocks_[i].setBounds(locks.removeFromLeft(width));
     auto second=area.removeFromTop(27);second.removeFromLeft(100);
@@ -90,7 +113,8 @@ void GeneratorPanel::timerCallback() {
     role_.setSelectedId(static_cast<int>(state.role)+1,juce::dontSendNotification);
     const int group=graphLock_.getSelectedId();if(group>=1&&group<=11)
         lockGroup_.setToggleState((state.graphLocks&(1u<<(group-1)))!=0,juce::dontSendNotification);
-    auto sync=[](juce::Slider& slider,float value){if(!slider.isMouseButtonDown()&&!slider.hasKeyboardFocus(true))slider.setValue(value,juce::dontSendNotification);};
+    auto sync=[](vox::ui::VoxKnob& dial,float value){auto& slider=dial.getSlider();
+        if(!slider.isMouseButtonDown()&&!slider.hasKeyboardFocus(true))slider.setValue(value,juce::dontSendNotification);};
     sync(intensity_,state.intensity);sync(energy_,state.energy);sync(stereo_,state.stereo);
     const int layer=lockLayer_.getSelectedId()-1;
     if(layer>=0&&layer<4){const auto mask=state.locks.layers[static_cast<std::size_t>(layer)];
@@ -98,6 +122,9 @@ void GeneratorPanel::timerCallback() {
         for(std::size_t i=0;i<fieldLocks_.size();++i)fieldLocks_[i].setToggleState((mask&bits[i])!=0,juce::dontSendNotification);}
 }
 ProgramCurvePanel::ProgramCurvePanel(FxProcessor& processor) : editor_(processor, std::nullopt) {
+    // Per-layer trajectory editors complete the 20 timeline targets.
+    for (std::size_t i = 0; i < layerEditors_.size(); ++i)
+        layerEditors_[i] = std::make_unique<CurveEditor>(processor, i);
     const char* names[] { "Amplitude", "Pitch", "Cutoff", "Panorama" };
     for (int i=0; i<4; ++i) selector_.addItem(names[i], i+1);
     selector_.setTitle("Program trajectory");
@@ -105,23 +132,43 @@ ProgramCurvePanel::ProgramCurvePanel(FxProcessor& processor) : editor_(processor
     selector_.onChange = [this] {
         const int index = selector_.getSelectedId() - 1;
         if (index < 0 || index >= 4) return;
-        editor_.setKind(static_cast<CurveKind>(index));
+        activeEditor().setKind(static_cast<CurveKind>(index));
         refreshHint();
     };
+    // 20 timeline targets: 4 trajectory kinds across Program + Layer A..D.
+    scope_.addItem("Program", 1);
+    for (int i = 0; i < 4; ++i)
+        scope_.addItem(juce::String("Layer ") + juce::String::charToString(static_cast<juce::juce_wchar>('A' + i)), i + 2);
+    scope_.setTitle("Timeline target scope");
+    scope_.setSelectedId(1, juce::dontSendNotification);
+    scope_.onChange = [this] { applyScope(); };
+    for (auto& editor : layerEditors_) addChildComponent(*editor);
     undo_.setTitle("Undo curve edit"); redo_.setTitle("Redo curve edit");
     reset_.setTooltip("Restore the selected trajectory to its neutral value; this edit can be undone");
-    undo_.onClick = [this] { (void)editor_.undo(); };
-    redo_.onClick = [this] { (void)editor_.redo(); };
-    reset_.onClick = [this] { (void)editor_.resetCurve(); };
+    undo_.onClick = [this] { (void)activeEditor().undo(); };
+    redo_.onClick = [this] { (void)activeEditor().redo(); };
+    reset_.onClick = [this] { (void)activeEditor().resetCurve(); };
     hint_.setFont(vox::ui::typography::controlLabel());
-    for (auto* child : std::array<juce::Component*,6>{ &selector_, &undo_, &redo_, &reset_, &editor_, &hint_ })
+    for (auto* child : std::array<juce::Component*,7>{ &scope_, &selector_, &undo_, &redo_, &reset_, &editor_, &hint_ })
         addAndMakeVisible(*child);
     refreshHint();
 }
-void ProgramCurvePanel::refresh() { editor_.refresh(); }
+CurveEditor& ProgramCurvePanel::editor() noexcept { return activeEditor(); }
+CurveEditor& ProgramCurvePanel::activeEditor() noexcept {
+    const auto scope = static_cast<std::size_t> (juce::jlimit (0, 4, scope_.getSelectedId() - 1));
+    return scope == 0 ? editor_ : *layerEditors_[scope - 1];
+}
+void ProgramCurvePanel::applyScope() {
+    for (auto& editor : layerEditors_) editor->setVisible (false);
+    editor_.setVisible (scope_.getSelectedId() <= 1);
+    activeEditor().setKind (static_cast<CurveKind> (juce::jlimit (0, 3, selector_.getSelectedId() - 1)));
+    activeEditor().refresh();
+    refreshHint();
+}
+void ProgramCurvePanel::refresh() { activeEditor().refresh(); }
 void ProgramCurvePanel::refreshHint() {
     const char* unit = "Amplitude: 0% to 100%";
-    switch (editor_.kind()) {
+    switch (activeEditor().kind()) {
         case CurveKind::gain: break;
         case CurveKind::pitch: unit = "Pitch: -24 to +24 semitones before layer pitch"; break;
         case CurveKind::cutoff: unit = "Cutoff: below to above the family sweep; center is neutral"; break;
@@ -142,13 +189,15 @@ void ProgramCurvePanel::paint(juce::Graphics& g) {
 void ProgramCurvePanel::resized() {
     auto area = getLocalBounds().reduced(12);
     auto header = area.removeFromTop(28);
-    header.removeFromLeft(270);
+    header.removeFromLeft(160);
+    scope_.setBounds(header.removeFromLeft(110).reduced(2));
     selector_.setBounds(header.removeFromLeft(140).reduced(2));
     undo_.setBounds(header.removeFromLeft(60).reduced(2));
     redo_.setBounds(header.removeFromLeft(60).reduced(2));
     reset_.setBounds(header.removeFromLeft(100).reduced(2));
     hint_.setBounds(area.removeFromBottom(22));
     editor_.setBounds(area);
+    for (auto& editor : layerEditors_) editor->setBounds(area);
 }
 WavOptionsPanel::WavOptionsPanel() {
     rate_.addItem("44.1 kHz",1); rate_.addItem("48 kHz",2); rate_.addItem("96 kHz",3);
@@ -199,12 +248,12 @@ void WavOptionsPanel::resized() {
 }
 namespace {
 constexpr const char* motionSources[]{"LFO 1","LFO 2","Event step","Sample & hold","Event ADSR","Event phase","Velocity","Dry signal follower","Macro 1","Macro 2","Macro 3","Macro 4","Macro 5","Macro 6","Macro 7","Macro 8"};
-constexpr const char* motionDestinations[]{"Master gain","Master balance","Voice pitch (±12 st)","Voice cutoff (±2 oct)","Filter Q (×¼–4)","Grain rate (×½–2)","Layer gain","Layer pan","Stereo width","FX 1 wet","FX 1 amount","FX 2 wet","FX 2 amount","FX 3 wet","FX 3 amount","FX 4 wet","FX 4 amount"};
+const juce::String motionDestinations[]{"Master gain","Master balance",u8("Voice pitch (±12 st)"),u8("Voice cutoff (±2 oct)"),u8("Filter Q (×¼–4)"),u8("Grain rate (×½–2)"),"Layer gain","Layer pan","Stereo width","FX 1 wet","FX 1 amount","FX 2 wet","FX 2 amount","FX 3 wet","FX 3 amount","FX 4 wet","FX 4 amount"};
 static_assert(std::size(motionSources)==static_cast<unsigned>(mod::Source::count));
 static_assert(std::size(motionDestinations)==static_cast<unsigned>(mod::Destination::count));
 }
 MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
-    title_.setText("MOTION — VOICE AND MIX ROUTES",juce::dontSendNotification);
+    title_.setText(u8("MOTION — VOICE AND MIX ROUTES"),juce::dontSendNotification);
     title_.setFont(vox::ui::typography::controlLabel());
     routeHelp_.setText("Depth is signed. Event sources target voices; dry follower targets mix/FX.",juce::dontSendNotification);
     rows_.setRowHeight(25);rows_.setMultipleSelectionEnabled(false);
@@ -229,7 +278,7 @@ MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
         addAndMakeVisible(sync_[i]);addAndMakeVisible(lfoRate_[i]);
     }
     randomRate_.setNumDecimalPlacesToDisplay(4);
-    shapeTitle_.setText("EVENT SHAPE — eight equal phase steps (0–100%)",juce::dontSendNotification);
+    shapeTitle_.setText(u8("EVENT SHAPE — eight equal phase steps (0–100%)"),juce::dontSendNotification);
     for(std::size_t i=0;i<steps_.size();++i){
         auto& step=steps_[i];step.setRange(0,100,.01);step.setTitle("Step "+juce::String(static_cast<int>(i+1)));
         step.setTooltip(step.getTitle());step.setSliderStyle(juce::Slider::LinearVertical);
@@ -248,12 +297,13 @@ MotionPanel::MotionPanel(FxProcessor& processor):processor_(processor){
     undoButton_.setTooltip("Undo a committed route, clock or event-shape edit in this editor");
     redoButton_.setTooltip("Redo a committed Motion edit; a new edit clears redo");
     setWantsKeyboardFocus(true);
-    reload_.onClick=[this]{refresh();};close_.onClick=[this]{setVisible(false);};
+    reload_.onClick=[this]{refresh();};close_.onClick=[this]{setVisible(false);if(onClosed)onClosed();};
     const std::array<juce::Component*,17> components{&title_,&routeHelp_,&rows_,&source_,&destination_,&depth_,&smooth_,&randomRate_,&randomSeed_,&status_,&apply_,&remove_,&clock_,&reload_,&close_,&undoButton_,&redoButton_};
     for(auto* c:components)addAndMakeVisible(*c);
     refresh(0);
 }
 int MotionPanel::getNumRows(){return static_cast<int>(shown_.config.count)+(shown_.config.count<64?1:0);}
+void MotionPanel::setEmbedded(bool embedded) noexcept { close_.setVisible(!embedded); }
 void MotionPanel::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool selected){
     namespace c=vox::ui::tokens::colour;
     if(selected)g.fillAll(c::border);
@@ -262,7 +312,7 @@ void MotionPanel::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool se
     juce::String text;
     if(static_cast<unsigned>(row)==shown_.config.count)text="+ Add route";
     else {const auto r=shown_.config.routes[static_cast<unsigned>(row)];
-        text=juce::String(row+1)+". "+motionSources[static_cast<unsigned>(r.source)]+" → "+motionDestinations[static_cast<unsigned>(r.destination)]+
+        text=juce::String(row+1)+". "+motionSources[static_cast<unsigned>(r.source)]+u8(" → ")+motionDestinations[static_cast<unsigned>(r.destination)]+
             "   "+juce::String(r.depth*100,1)+"% / "+juce::String(r.smoothingSeconds*1000,0)+" ms";}
     g.drawFittedText(text,8,0,w-16,h,juce::Justification::centredLeft,1);
 }
@@ -398,6 +448,19 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     slider(character_,-100,100,.1,"Source character (relative to legacy)"," %");
     character_.onStructuralChange=[this]{const auto value=static_cast<float>(character_.getValue()*.01);editLayer([=](NoiseLayer& l){l.character=value;});};
     addAndMakeVisible(characterLabel_);
+    for(std::size_t i=0;i<familyControls_.size();++i){
+        slider(familyControls_[i],-100,100,.1,"Family control"," %");
+        familyControls_[i].onStructuralChange=[this,i]{
+            const auto value=static_cast<float>(familyControls_[i].getValue()*.01);
+            editLayer([i,value](NoiseLayer& l){
+                auto& controls=l.familyControls;
+                if(i==0)controls.primary=value;else if(i==1)controls.motion=value;else controls.density=value;
+            });
+        };
+        familyControlLabels_[i].setJustificationType(juce::Justification::centredLeft);
+        familyControlLabels_[i].setFont(vox::ui::typography::controlLabel());
+        addAndMakeVisible(familyControlLabels_[i]);
+    }
     slider(grainLength_,10,180,.1,"Grain length"," ms");slider(grainPosition_,0,100,.1,"Grain start"," %");
     grainLength_.onStructuralChange=[this]{const auto value=static_cast<float>(grainLength_.getValue());editLayer([=](auto& l){l.grains.milliseconds=value;});};
     slider(grainTravel_,-100,100,1,"Grain travel across the layer timeline"," %");
@@ -462,6 +525,7 @@ SourcePanel::SourcePanel(FxProcessor& processor):processor_(processor) {
     int order=0;
     const auto tab=[&](juce::Component& child){child.setExplicitFocusOrder(++order);};
     tab(layer_);tab(root_);tab(scale_);tab(transpose_);tab(character_);
+    for(auto& control:familyControls_)tab(control);
     for(auto& f:filters_){tab(f.type);tab(f.slope);tab(f.hz);tab(f.q);}
     tab(grainLength_);tab(grainPosition_);tab(grainTravel_);tab(scatter_);tab(reverse_);
     tab(sliceGrid_);tab(sliceRead_);for(auto& gate:sliceGate_)tab(gate);tab(sliceReset_);tab(close_);
@@ -493,7 +557,7 @@ template <typename Edit> void SourcePanel::editLayer(Edit edit){
 void SourcePanel::editKey(){
     const int root=root_.getSelectedId()-1,scale=scale_.getSelectedId()-1;
     if(root>=0&&root<12&&scale>=0&&scale<5)
-        (void)processor_.editTonalityIfRevision({static_cast<source::Scale>(scale),static_cast<std::uint8_t>(root)},revision_);
+        (void)processor_.editTonality({static_cast<source::Scale>(scale),static_cast<std::uint8_t>(root)});
     refresh();
 }
 void SourcePanel::refresh(){
@@ -507,9 +571,16 @@ void SourcePanel::refresh(){
     scale_.setSelectedId(static_cast<int>(snapshot.program.tonality.scale)+1,juce::dontSendNotification);
     root_.setEnabled(snapshot.program.tonality.scale!=source::Scale::chromatic);
     constexpr const char* characterNames[]{"Noise brightness","Tonal blend","Partial brightness","Sub level","Doppler depth","Sweep range","Resonance","Upper modes","Detune","Vowel spacing","Slice edge","Grain density"};
-    const auto* name=characterNames[static_cast<unsigned>(layer.family)];
+    const auto familyIndex=static_cast<unsigned>(layer.family);
+    const auto* name=characterNames[familyIndex];
     characterLabel_.setText(name,juce::dontSendNotification);character_.setTitle(name);
     if(!character_.isMouseButtonDown())character_.setValue(layer.character*100,juce::dontSendNotification);
+    for(std::size_t i=0;i<familyControls_.size();++i){
+        familyControlLabels_[i].setText(familyControlNames[familyIndex][i],juce::dontSendNotification);
+        familyControls_[i].setTitle(familyControlNames[familyIndex][i]);
+        const auto value=i==0?layer.familyControls.primary:i==1?layer.familyControls.motion:layer.familyControls.density;
+        if(!familyControls_[i].isMouseButtonDown())familyControls_[i].setValue(value*100,juce::dontSendNotification);
+    }
     if(!transpose_.isMouseButtonDown())transpose_.setValue(layer.transpose,juce::dontSendNotification);
     const bool glitch=layer.family==NoiseFamily::glitch;
     const bool granular=layer.family==NoiseFamily::granular;
@@ -547,17 +618,17 @@ void SourcePanel::paint(juce::Graphics& g){
     g.fillAll(c::panelRaised);g.setColour(c::border);g.drawRect(getLocalBounds());
     g.setColour(c::text);g.setFont(vox::ui::typography::controlLabel());
     auto a=getLocalBounds().reduced(14);
-    g.drawText("SOURCE / KEY    •    Applies to new events",a.removeFromTop(21),juce::Justification::centredLeft);
+    g.drawText(u8("SOURCE / KEY    •    Applies to new events"),a.removeFromTop(21),juce::Justification::centredLeft);
     a.removeFromTop(72);
     g.drawText("FILTER     TYPE                     SLOPE                   CUTOFF                                           RESONANCE",a.removeFromTop(20),juce::Justification::centredLeft);
     g.drawText("A",a.removeFromTop(31),juce::Justification::centredLeft);
     g.drawText("B",a.removeFromTop(31),juce::Justification::centredLeft);
     const auto labels=a.removeFromTop(22);
-    const auto label=[&](const char* text,const juce::Component& child){
+    const auto label=[&](const juce::String& text,const juce::Component& child){
         g.drawText(text,labels.withX(child.getX()).withWidth(getWidth()-child.getX()),juce::Justification::centredLeft);
     };
     if(sliceGrid_.isVisible()){
-        label("Slice grid",sliceGrid_);label("Read",sliceRead_);label("Repeat gates 1–4",sliceGate_[0]);
+        label("Slice grid",sliceGrid_);label("Read",sliceRead_);label(u8("Repeat gates 1–4"),sliceGate_[0]);
     }else if(grainLength_.isVisible()){
         label("Grain length",grainLength_);label("Start",grainPosition_);label("Travel",grainTravel_);
     }
@@ -565,10 +636,21 @@ void SourcePanel::paint(juce::Graphics& g){
 void SourcePanel::resized(){
     auto a=getLocalBounds().reduced(14);a.removeFromTop(21);
     auto first=a.removeFromTop(32);
-    layer_.setBounds(first.removeFromLeft(142).reduced(2));root_.setBounds(first.removeFromLeft(78).reduced(2));scale_.setBounds(first.removeFromLeft(145).reduced(2));
+    layer_.setBounds(first.removeFromLeft(142).reduced(2));
+    // root_ lives in the PERFORM Program-Generator selects row (reference
+    // PITCH KEY); the source overlay must not re-position it.
+    if(root_.getParentComponent()==this)root_.setBounds(first.removeFromLeft(78).reduced(2));else first.removeFromLeft(78);
+    scale_.setBounds(first.removeFromLeft(145).reduced(2));
     auto voice=a.removeFromTop(36);
     transpose_.setBounds(voice.removeFromLeft(248).reduced(2));
-    characterLabel_.setBounds(voice.removeFromLeft(108).reduced(2));character_.setBounds(voice.reduced(2));a.removeFromTop(24);
+    characterLabel_.setBounds(voice.removeFromLeft(108).reduced(2));character_.setBounds(voice.reduced(2));
+    auto family=a.removeFromTop(38);
+    for(std::size_t i=0;i<familyControls_.size();++i){
+        auto cell=family.removeFromLeft(family.getWidth()/(static_cast<int>(familyControls_.size()-i)));
+        familyControlLabels_[i].setBounds(cell.removeFromTop(16).reduced(2,0));
+        familyControls_[i].setBounds(cell.reduced(2,0));
+    }
+    a.removeFromTop(8);
     for(auto& f:filters_){auto row=a.removeFromTop(31);row.removeFromLeft(28);
         f.type.setBounds(row.removeFromLeft(118).reduced(2));f.slope.setBounds(row.removeFromLeft(110).reduced(2));
         f.hz.setBounds(row.removeFromLeft(row.getWidth()/2).reduced(2));f.q.setBounds(row.reduced(2));}
@@ -596,9 +678,9 @@ juce::String presetKey(source::Tonality key,bool pitched){
 }
 }
 PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(processor),root_(std::move(root)){
-    title_.setText("PRESETS — REVIEW CATALOG / USER LIBRARY",juce::dontSendNotification);
+    title_.setText(u8("PRESETS — REVIEW CATALOG / USER LIBRARY"),juce::dontSendNotification);
     title_.setFont(vox::ui::typography::controlLabel());
-    search_.setTitle("Search name, role, style, mood, use case or mode");search_.setTextToShowWhenEmpty("Search words…",juce::Colours::grey);
+    search_.setTitle("Search name, role, style, mood, use case or mode");search_.setTextToShowWhenEmpty(u8("Search words…"),juce::Colours::grey);
     scope_.addItem("All",1);scope_.addItem("Review only",2);scope_.addItem("User only",3);scope_.setSelectedId(1,juce::dontSendNotification);
     role_.addItem("All roles",1);editRole_.setTitle("User preset role");
     for(int i=0;i<9;++i){role_.addItem(browserRoles[i],i+2);editRole_.addItem(browserRoles[i],i+1);}
@@ -610,9 +692,9 @@ PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(
     constexpr const char* facets[]{"All styles","All moods","All uses"};
     std::array facetsControls{&styleFacet_,&moodFacet_,&useFacet_};
     for(std::size_t i=0;i<facetsControls.size();++i){facetsControls[i]->setTitle(facets[i]);facetsControls[i]->onChange=[this]{filter();};}
-    const auto fillFacet=[this](juce::ComboBox& c,std::initializer_list<const char*> choices){
-        int id=1;for(auto* label:choices)c.addItem(label,id++);c.setSelectedId(1,juce::dontSendNotification);c.onChange=[this]{filter();};};
-    fillFacet(durationFacet_,{"All durations","Short ≤1 s","Long >1 s","Bars / Sequence","Host duration"});
+    const auto fillFacet=[this](juce::ComboBox& c,std::initializer_list<juce::String> choices){
+        int id=1;for(const auto& label:choices)c.addItem(label,id++);c.setSelectedId(1,juce::dontSendNotification);c.onChange=[this]{filter();};};
+    fillFacet(durationFacet_,{"All durations",u8("Short ≤1 s"),"Long >1 s","Bars / Sequence","Host duration"});
     fillFacet(tonalFacet_,{"All tonality","Pitch-responsive","Noise only"});
     durationFacet_.setTitle("Filter by duration");tonalFacet_.setTitle("Filter by pitch classification");
     rows_.setRowHeight(28);rows_.setMultipleSelectionEnabled(false);
@@ -624,13 +706,14 @@ PresetBrowser::PresetBrowser(FxProcessor& processor,juce::File root):processor_(
     load_.onClick=[this]{load();};play_.onClick=[this]{runPreview();};stop_.onClick=[this]{stopPreview();report("Preview stopped");};
     save_.onClick=[this]{save(false);};tags_.onClick=[this]{save(true);};remove_.onClick=[this]{erase();};
     openFile_.onClick=[this]{stopPreview();if(looseFile)looseFile(false);};saveFile_.onClick=[this]{if(looseFile)looseFile(true);};
-    close_.onClick=[this]{stopPreview();setVisible(false);};
+    close_.onClick=[this]{stopPreview();setVisible(false);if(onClosed)onClosed();};
     const std::array<juce::Component*,28> controls{&rows_,&search_,&name_,&style_,&mood_,&use_,&scope_,&role_,&mode_,&editRole_,&onlyFavorites_,&favorite_,&title_,&detail_,&status_,&load_,&play_,&stop_,&save_,&tags_,&remove_,&openFile_,&saveFile_,
         &styleFacet_,&moodFacet_,&useFacet_,&durationFacet_,&tonalFacet_};
     for(auto* c:controls)addAndMakeVisible(*c);addAndMakeVisible(close_);
 }
 PresetBrowser::~PresetBrowser(){stopTimer();stopPreview();}
 void PresetBrowser::open(){scan();setVisible(true);toFront(true);}
+void PresetBrowser::setEmbedded(bool embedded){close_.setVisible(!embedded);}
 int PresetBrowser::getNumRows(){return static_cast<int>(visible_.size());}
 const PresetBrowser::Row* PresetBrowser::selected() const noexcept{
     const auto index=rows_.getSelectedRow();return index>=0&&static_cast<std::size_t>(index)<visible_.size()?&all_[visible_[static_cast<std::size_t>(index)]]:nullptr;
@@ -645,13 +728,13 @@ void PresetBrowser::scan(){
         const auto seconds=bars?0.f:e.seconds;
         const auto key=presetKey(authored.program.tonality,e.pitchedSource);
         portable::Tags tags{std::string(e.name),std::string(e.style),std::string(e.mood),std::string(content::useCase(e)),static_cast<unsigned>(e.role),false};
-        auto notes=juce::String(browserModes[static_cast<unsigned>(e.mode)])+"  •  "+juce::String(e.bpm,0)+" BPM  •  "+
+        auto notes=juce::String(browserModes[static_cast<unsigned>(e.mode)])+u8("  •  ")+juce::String(e.bpm,0)+u8(" BPM  •  ")+
             (bars?juce::String(bars)+" bars":juce::String(seconds,2)+" s")+"\n"+
-            key+"  •  Built-in assets  •  Review only\n"+juce::String(tags.use);
+            key+u8("  •  Built-in assets  •  Review only\n")+juce::String(tags.use);
         auto searchable=lowerQuery(tags,e.mode)+" "+key.toLowerCase();
         all_.push_back({std::move(tags),e.mode,static_cast<int>(i),{},std::move(notes),bars,seconds,e.pitchedSource,key,std::move(searchable)});
     }
-    indexStatus_="Scanning user presets…";
+    indexStatus_=u8("Scanning user presets…");
     try{indexJob_=std::make_unique<library::IndexJob>(root_);startTimerHz(20);}
     catch(...){indexStatus_="Could not start user scan";}
     rebuild();
@@ -659,8 +742,8 @@ void PresetBrowser::scan(){
 void PresetBrowser::upsert(const library::IndexEntry& entry){
     const auto key=presetKey(entry.key,entry.pitched);
     const auto length=entry.bars?juce::String(entry.bars)+" bars":juce::String("Host duration");
-    const auto details=juce::String(browserModes[static_cast<unsigned>(entry.mode)])+"  •  "+length+"  •  "+key+"\n"+
-        (entry.asset==sample::Reference::Kind::builtin?"Built-in source":entry.asset==sample::Reference::Kind::pending?"Unverified sample — reimport WAV":"External WAV · SHA verified on Preview/Load");
+    const auto details=juce::String(browserModes[static_cast<unsigned>(entry.mode)])+u8("  •  ")+length+u8("  •  ")+key+"\n"+
+        (entry.asset==sample::Reference::Kind::builtin?"Built-in source":entry.asset==sample::Reference::Kind::pending?u8("Unverified sample — reimport WAV"):u8("External WAV · SHA verified on Preview/Load"));
     auto searchable=lowerQuery(entry.tags,entry.mode)+" "+key.toLowerCase();
     Row row{entry.tags,entry.mode,-1,entry.file,details,entry.bars,0,entry.pitched,key,std::move(searchable)};
     const auto at=std::find_if(all_.begin(),all_.end(),[&](const Row& r){return r.factory<0&&r.file==entry.file;});
@@ -712,15 +795,15 @@ void PresetBrowser::filter(){
     const auto previous=rows_.getSelectedRow();
     if(select<0)rows_.deselectAllRows();else rows_.selectRow(select);
     if(previous==select)selectedRowsChanged(select);
-    report(juce::String(static_cast<int>(visible_.size()))+" shown"+(indexStatus_.isEmpty()?"":" · "+indexStatus_));
+    report(juce::String(static_cast<int>(visible_.size()))+" shown"+(indexStatus_.isEmpty()?"":u8(" · ")+indexStatus_));
 }
 void PresetBrowser::paintListBoxItem(int row,juce::Graphics& g,int w,int h,bool selectedRow){
     if(row<0||static_cast<std::size_t>(row)>=visible_.size())return;
     const auto& item=all_[visible_[static_cast<std::size_t>(row)]];
     namespace c=vox::ui::tokens::colour;
     if(selectedRow)g.fillAll(c::border);g.setColour(c::text);g.setFont(juce::FontOptions(13.f));
-    const auto line=juce::String(item.factory>=0?"REVIEW  ":"USER  ")+juce::String(item.tags.name)+"  ·  "+browserRoles[item.tags.role]+
-        (item.tags.style.empty()?"":"  ·  "+juce::String(item.tags.style))+(item.tags.favorite?"  ★":"");
+    const auto line=juce::String(item.factory>=0?"REVIEW  ":"USER  ")+juce::String(item.tags.name)+u8("  ·  ")+browserRoles[item.tags.role]+
+        (item.tags.style.empty()?"":u8("  ·  ")+juce::String(item.tags.style))+(item.tags.favorite?u8("  ★"):"");
     g.drawFittedText(line,8,0,w-16,h,juce::Justification::centredLeft,1);
 }
 void PresetBrowser::selectedRowsChanged(int){
@@ -744,7 +827,7 @@ void PresetBrowser::load(){
     stopPreview();portable::Sound sound;
     const bool ok=row->factory>=0?processor_.loadReviewCandidate(static_cast<std::size_t>(row->factory)):
         library::read(row->file,sound)&&processor_.applyPortableSound(sound);
-    report(ok?"Loaded structure · host values unchanged":"Preset is unavailable or invalid");
+    report(ok?u8("Loaded structure · host values unchanged"):"Preset is unavailable or invalid");
 }
 void PresetBrowser::save(bool tagsOnly){
     if(indexJob_)return;
@@ -779,7 +862,7 @@ void PresetBrowser::runPreview(){
     if(row->factory>=0)capture=content::makePreview(content::reviewEntries[static_cast<std::size_t>(row->factory)],preview::Job::rate);
     else {portable::Sound sound;if(!library::read(row->file,sound)){report("User preset unavailable");return;}
         capture=processor_.capturePresetPreview(sound);reference=std::move(sound.sample);}
-    try{audition_=std::make_unique<preview::Job>(std::move(capture),std::move(reference));armed_=true;startTimerHz(20);report("Rendering preview…");}
+    try{audition_=std::make_unique<preview::Job>(std::move(capture),std::move(reference));armed_=true;startTimerHz(20);report(u8("Rendering preview…"));}
     catch(...){report("Could not start preview worker");}
 }
 void PresetBrowser::stopPreview(){armed_=false;if(audition_)audition_->cancel();processor_.previewBus().stop();}
@@ -789,14 +872,14 @@ void PresetBrowser::pollBackground(){
         auto result=indexJob_->take();indexJob_.reset();
         for(const auto& item:result.entries)upsert(item);
         indexStatus_=result.unavailable?"User library unavailable":juce::String{};
-        if(result.invalid)indexStatus_+=(indexStatus_.isEmpty()?"":" · ")+juce::String(result.invalid)+" invalid user presets skipped";
-        if(result.limited)indexStatus_+=(indexStatus_.isEmpty()?"":" · ")+juce::String("User scan limited to 512 files");
+        if(result.invalid)indexStatus_+=(indexStatus_.isEmpty()?"":u8(" · "))+juce::String(result.invalid)+" invalid user presets skipped";
+        if(result.limited)indexStatus_+=(indexStatus_.isEmpty()?"":u8(" · "))+juce::String("User scan limited to 512 files");
         visible_.clear();rebuild();
     }
     if(audition_){const auto result=audition_->result();if(result==preview::Result::loading)return;
         const bool started=armed_&&result==preview::Result::ready&&audition_->publish(processor_.previewBus(),previewTicket_);
         if(armed_&&previewTicket_!=processor_.previewBus().ticket())report("Preview cancelled by restore, panic or offline processing");
-        else if(armed_)report(started?"Preview ready · host audio must be running":"Preview unavailable (asset, empty schedule or audio bounds)");
+        else if(armed_)report(started?u8("Preview ready · host audio must be running"):"Preview unavailable (asset, empty schedule or audio bounds)");
         audition_.reset();armed_=false;
         if(!started){if(!indexJob_)stopTimer();return;}
     }
@@ -878,13 +961,24 @@ void FxPanel::patternCommand(int id){
 }
 FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     : processor_ (processor),savePicker_(std::move(picker)),externalDrag_(std::move(drag)), attachment_ (processor.outputParameter(), output_.getSlider()),
-      durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor), sourcePanel_(processor), motionPanel_(processor), browser_(processor)
+      durationAttachment_ (processor.durationParameter(), duration_), programCurves_(processor), sourcePanel_(processor), motionPanel_(processor), browser_(processor),
+      eventChart_ (processor)
 {
+    // Select the product theme FIRST: any construction-time or paint-time
+    // read of the shared tokens (including children added below) sees the
+    // FX variant, never the product-neutral default.
+    vox::ui::tokens::colour::selectFxTheme();
     addAndMakeVisible (output_);
     addAndMakeVisible (duration_);
-    duration_.setDoubleClickResetValue (4.0);
-    duration_.getSlider().setTitle ("Event duration in seconds");
-    duration_.getSlider().setDescription ("Duration applied to newly triggered events");
+    // Reference seed-row NumericValue: a compact seconds chip. The value
+    // stays the real host-automatable duration parameter.
+    duration_.setRange (0.05, 32.0, 0.05);
+    duration_.setSliderStyle (juce::Slider::LinearBar);
+    duration_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 26);
+    duration_.textFormatter = [] (double value) { return juce::String (value, 2) + " s"; };
+    duration_.setDoubleClickReturnValue (true, 4.0);
+    duration_.setTitle ("Event duration in seconds");
+    duration_.setDescription ("Duration applied to newly triggered events");
     output_.setDoubleClickResetValue (1.0);
     output_.getSlider().setTitle ("Output gain");
     output_.getSlider().setDescription ("Master output gain");
@@ -1002,7 +1096,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     dragGrip_.setDescription(dragGrip_.getTooltip());
     dragGrip_.begin=[this]{beginFileDrag();};
     addAndMakeVisible(dragGrip_);
-    dragWarning_.setText("Copy into project · Save for a lasting file",juce::dontSendNotification);
+    dragWarning_.setText(u8("Copy into project · Save for a lasting file"),juce::dontSendNotification);
     dragWarning_.setJustificationType(juce::Justification::centredRight);
     dragWarning_.setFont(juce::FontOptions(12.0f));
     dragWarning_.setTooltip("Temporary files may expire. Availability is checked when dragging; the OS may still read later after that check. Copy imports into the project; handed-off files are retained even after canceled drops.");
@@ -1016,11 +1110,11 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     stopAudition_.onClick=[this]{processor_.stopAudition();};
     panic_.setTooltip ("Fade all active events");
     audition_.onClick = [this] { processor_.audition(); };
-    panic_.onClick = [this] { processor_.panic(); };
+    panic_.onClick = [this] { keyboard_.releaseAllNotes(); processor_.panic(); };
     seed_.setRange (1, 2147483647, 1);
     seed_.setValue (processor_.generatorState().seed, juce::dontSendNotification);
-    seed_.setSliderStyle (juce::Slider::LinearHorizontal);
-    seed_.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 85, 25);
+    seed_.setSliderStyle (juce::Slider::LinearBar);
+    seed_.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 40, 24);
     seed_.setTitle ("Generator seed");
     seed_.setTooltip ("Deterministic seed for Generate and Mutate");
     seed_.onValueChange=[this] {const auto seed=static_cast<std::uint32_t>(seed_.getValue());
@@ -1048,30 +1142,44 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     addAndMakeVisible (generate_); addAndMakeVisible (mutate_);
     generatorSettings_.setTitle("Generator settings");generatorSettings_.setTooltip("Adjust generator shaping and per-field layer locks");
     generatorPanel_=std::make_unique<GeneratorPanel>(processor_);addChildComponent(*generatorPanel_);
+    // Reference recipe dial size (60px) for the generator recipe knobs.
+    generatorPanel().intensitySlider().setCustomDiameter (60);
+    generatorPanel().energySlider().setCustomDiameter (60);
+    generatorPanel().stereoSlider().setCustomDiameter (60);
+    for (auto& knob : macroKnobs_) knob.setCustomDiameter (60);
     generatorSettings_.onClick=[this]{generatorPanel_->setVisible(true);generatorPanel_->toFront(true);};
     addAndMakeVisible(generatorSettings_);
     for (int i=0; i<4; ++i) {
         layers_[static_cast<std::size_t>(i)] = std::make_unique<LayerPanel>(processor_,i);
         addAndMakeVisible(*layers_[static_cast<std::size_t>(i)]);
+        const auto layerIndex=static_cast<std::size_t>(i);
+        layers_[layerIndex]->onEditSource=[this,layerIndex]{
+            sourcePanel_.layerSelector().setSelectedId(static_cast<int>(layerIndex)+1,juce::sendNotificationSync);
+            sourcePanel_.open(*this);
+        };
+        // Reference 2x2 curve directory: a thumbnail opens the timeline on
+        // that layer's trajectory (openTimeline(i*4+n)).
+        layers_[layerIndex]->onOpenTimeline=[this,layerIndex](int kind){
+            openTimelineCurve(layerIndex,kind);
+        };
     }
     addChildComponent(programCurves_);
     programCurvesButton_.setClickingTogglesState(true);
     programCurvesButton_.setTooltip("Switch between layer cards and Program amplitude, pitch, cutoff and panorama");
     programCurvesButton_.onClick = [this] {
-        const bool show = programCurvesButton_.getToggleState();
-        for (auto& layer : layers_) layer->setVisible(!show);
-        if (show) programCurves_.refresh();
-        programCurves_.setVisible(show);
-        programCurvesButton_.setButtonText(show ? "Layer cards" : "Program curves");
+        // Toggle contract (tests + users): on = Program curves workspace,
+        // off = layer cards. Visibility is owned by the workspace shell.
+        setWorkspace(programCurvesButton_.getToggleState() ? Workspace::timeline : Workspace::design);
     };
     addAndMakeVisible(programCurvesButton_);
     addChildComponent(sourcePanel_);
     sourceButton_.setTooltip("Edit Program key, per-layer pitch and filters, and Glitch or Granular source controls");
     sourceButton_.onClick=[this]{sourcePanel_.open(sourceButton_);};
     addChildComponent(motionPanel_);
-    motionButton_.setTooltip("Open the native 64-route modulation editor");
-    motionButton_.onClick=[this]{motionPanel_.refresh();motionPanel_.setVisible(true);motionPanel_.toFront(true);};
-    addAndMakeVisible(motionButton_);
+    motionPanel_.onClosed=[this]{ setWorkspace(Workspace::perform); };
+    browser_.onClosed=[this]{ setWorkspace(Workspace::perform); };
+    browser_.setEmbedded(true);
+    motionPanel_.setEmbedded(true);
     addAndMakeVisible(sourceButton_);
     addChildComponent(browser_);
     presets_.setTooltip("Browse the immutable review catalog and your tagged user presets");
@@ -1085,7 +1193,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         for (std::size_t n=0;n<std::size(names);++n) type.addItem(names[n],static_cast<int>(n+1));
         type.setTitle("Shared effect slot " + juce::String(static_cast<int>(i+1)));
         type.setTooltip("Tempo Delay: eighth-note tap at host BPM (120 if unavailable, 30 BPM minimum); Amount is feedback");
-        type.onChange=[this,i] { auto s=processor_.effect(i);s.type=static_cast<effects::Type>(effectsType_[i].getSelectedId()-1);(void)processor_.setEffect(i,s); };
+        type.onChange=[this,i] { auto s=processor_.effect(i);s.type=static_cast<effects::Type>(effectsType_[i].getSelectedId()-1);(void)processor_.setEffect(i,s);refreshEffectSemantics(i); };
         addAndMakeVisible(type);
         for (auto* slider : {&effectsWet_[i],&effectsAmount_[i]}) {
             slider->setRange(0,1,.001);slider->setSliderStyle(juce::Slider::LinearHorizontal);
@@ -1098,6 +1206,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         wetAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(processor_.effectWetParameter(i),effectsWet_[i]);
         amountAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(processor_.effectAmountParameter(i),effectsAmount_[i]);
         const auto s=processor_.effect(i);type.setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
+        refreshEffectSemantics(i);
     }
     patternSelector_.setTextWhenNothingSelected("Load seed pattern...");
     patternSelector_.setTitle("Load trigger seed pattern");
@@ -1111,7 +1220,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     };
     patternEnabled_.setClickingTogglesState(true);
     patternEnabled_.setTitle("Enable host-synchronized trigger pattern");
-    patternEnabled_.setTooltip("Requires a playing 4/4 host with PPQ and 10–1000 BPM; oversized blocks are rejected to bound callback work");
+    patternEnabled_.setTooltip(u8("Requires a playing 4/4 host with PPQ and 10–1000 BPM; oversized blocks are rejected to bound callback work"));
     patternAttachment_=std::make_unique<juce::ButtonParameterAttachment>(processor_.patternEnabledParameter(),patternEnabled_);
     addAndMakeVisible(patternSelector_);addAndMakeVisible(patternEnabled_);
     for(int i=1;i<=4;++i){patternLength_.addItem(juce::String(i)+" bars",i);patternBar_.addItem("Bar "+juce::String(i),i);}
@@ -1130,8 +1239,8 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     for(int i=1;i<=3;++i)patternPage_.addItem("Page "+juce::String(i),i);
     patternPage_.setTitle("Step page within bar");patternPage_.setSelectedId(1,juce::dontSendNotification);
     patternPage_.onChange=[this]{refreshPattern();};
-    patternSwing_.setRange(0,1,.01);patternSwing_.setSliderStyle(juce::Slider::LinearHorizontal);
-    patternSwing_.setTextBoxStyle(juce::Slider::TextBoxLeft,false,40,20);
+    patternSwing_.setRange(0,1,.01);patternSwing_.setSliderStyle(juce::Slider::LinearBar);
+    patternSwing_.setTextBoxStyle(juce::Slider::NoTextBox,false,0,0);
     patternSwing_.setTitle("Pattern swing");patternSwing_.setTooltip("Delay odd steps up to half their grid interval");
     patternSwing_.onStructuralChange=[this]{const float swing=static_cast<float>(patternSwing_.getValue());
         editPattern([swing](pattern::Pattern& p){p.swing=swing;});};
@@ -1145,7 +1254,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     const char* suffixes[]{" N"," V"," %"," x"};
     for(std::size_t i=0;i<patternDetails_.size();++i){auto& slider=patternDetails_[i];
         slider.setRange(i==0||i==2?0:1,i==0?127:i==1?127:i==2?100:4,1);
-        slider.setSliderStyle(juce::Slider::LinearHorizontal);slider.setTextBoxStyle(juce::Slider::TextBoxBelow,false,48,20);
+        slider.setSliderStyle(juce::Slider::LinearBar);slider.setTextBoxStyle(juce::Slider::NoTextBox,false,0,0);
         slider.setTextValueSuffix(suffixes[i]);slider.setTitle(detailNames[i]);slider.setTooltip(detailNames[i]);
         slider.onStructuralChange=[this,i] {const int bar=patternBar_.getSelectedId(),step=patternStepSelector_.getSelectedId(),page=patternPage_.getSelectedId();
             const int value=static_cast<int>(patternDetails_[i].getValue());
@@ -1172,7 +1281,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         addAndMakeVisible(step);
     }
     patternActions_.setTitle("Pattern clipboard, selected bar variations, undo and redo");
-    patternActions_.setTooltip("Copy the whole Pattern or the selected bar. Bar copy lasts until this editor closes; paste requires the same grid. Shift or reverse the selected bar without changing other bars.");patternActions_.setTextWhenNothingSelected("Edit…");
+    patternActions_.setTooltip("Copy the whole Pattern or the selected bar. Bar copy lasts until this editor closes; paste requires the same grid. Shift or reverse the selected bar without changing other bars.");patternActions_.setTextWhenNothingSelected(u8("Edit…"));
     patternActions_.addItem("Copy Pattern",1);patternActions_.addItem("Paste Pattern",2);
     patternActions_.addItem("Copy selected bar",5);patternActions_.addItem("Paste into selected bar",6);
     patternActions_.addSeparator();
@@ -1188,10 +1297,124 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     };
     bindPatternDrag(patternSwing_);for(auto& control:patternDetails_)bindPatternDrag(control);
     refreshPattern();
+    // Workspace shell: tab strip, section header, persistent keyboard.
+    // Reference tab order (PR #160): PERFORM first, then DESIGN. Tab
+    // positions map onto the Workspace enum through tabWorkspaces. Glyph
+    // keywords draw as compact vector icons (reference lucide icons).
+    workspaceTabs_.setTabs({
+        {"perform","PERFORM","sliders"},{"design","DESIGN","layers"},{"timeline","TIMELINE","wave"},{"motion","MOTION","wave"},
+        {"process","PROCESS","arrow"},{"trigger","TRIGGER","grid"},{"presets","PRESETS","star"},{"advanced","ADVANCED","warning"}});
+    workspaceTabs_.onTabChanged=[this](int index){
+        if(!syncingTabs_&&index>=0&&index<workspaceCount)
+            setWorkspace (tabWorkspaces[static_cast<std::size_t>(index)]);};
+    addAndMakeVisible(workspaceTabs_);
+    addAndMakeVisible(workspaceHeader_);
+    // UI keyboard -> bounded processor queue (channel uiNoteChannel); the
+    // audio thread consumes it and never echoes it into the host MIDI path.
+    keyboard_.onNoteOn=[this](int note,float velocity){
+        const bool queued=processor_.pushUiNote({1,static_cast<std::uint8_t>(note),
+            static_cast<std::uint8_t>(juce::jlimit(1,127,int(std::lround(velocity*127.0f))))});
+        // Fail closed: a dropped press must not leave a held visual.
+        if(!queued)keyboard_.releaseAllNotes();
+        else if(processor_.program().mode==PlayMode::oneShot)keyboard_.pulseNote(note);};
+    keyboard_.onNoteOff=[this](int note){
+        (void)processor_.pushUiNote({0,static_cast<std::uint8_t>(note),0});};
+    keyboard_.onAllNotesOff=[this]{processor_.cancelUiNotes();};
+    addAndMakeVisible(keyboard_);
+    keyboard_.setAccent(vox::ui::tokens::colour::fx::accent);
+    for (auto* module : std::array<vox::ui::VoxModule*,12>{ &generatorModule_, &previewModule_,
+                 &macrosModule_, &designModule_, &timelineModule_, &motionModule_, &flowModule_,
+                 &slotsModule_, &outputModule_, &patternModule_, &presetsModule_, &advancedModule_ })
+    {
+        addChildComponent(*module);
+        // Module chrome sits behind the controls it hosts: it is a backdrop,
+        // not an opaque sibling on top of them.
+        module->toBack();
+    }
+    // Reference panel-header icons (lucide equivalents, vector-drawn).
+    generatorModule_.setIcon (vox::ui::VoxModule::Icon::sliders);
+    previewModule_.setIcon (vox::ui::VoxModule::Icon::preview);
+    macrosModule_.setIcon (vox::ui::VoxModule::Icon::grid);
+    designModule_.setIcon (vox::ui::VoxModule::Icon::layers);
+    timelineModule_.setIcon (vox::ui::VoxModule::Icon::wave);
+    motionModule_.setIcon (vox::ui::VoxModule::Icon::flow);
+    flowModule_.setIcon (vox::ui::VoxModule::Icon::flow);
+    slotsModule_.setIcon (vox::ui::VoxModule::Icon::sliders);
+    outputModule_.setIcon (vox::ui::VoxModule::Icon::output);
+    patternModule_.setIcon (vox::ui::VoxModule::Icon::pattern);
+    presetsModule_.setIcon (vox::ui::VoxModule::Icon::star);
+    advancedModule_.setIcon (vox::ui::VoxModule::Icon::warning);
+    for (auto& label : moduleLabels_) {
+        label.setJustificationType(juce::Justification::centredLeft);
+        label.setColour(juce::Label::textColourId, vox::ui::tokens::colour::textSecondary);
+        label.setFont(vox::ui::typography::eyebrow());
+        label.setInterceptsMouseClicks(false,false);
+        addChildComponent(label);
+    }
+    for (auto* label : { &previewName_, &previewMeta_ }) {
+        label->setJustificationType(juce::Justification::centredLeft);
+        label->setInterceptsMouseClicks(false,false);
+        addChildComponent(*label);
+    }
+    previewName_.setColour(juce::Label::textColourId, vox::ui::tokens::colour::text);
+    previewName_.setFont(vox::ui::typography::sectionTitle());
+    previewMeta_.setColour(juce::Label::textColourId, vox::ui::tokens::colour::textMuted);
+    previewMeta_.setFont(vox::ui::typography::mono(10.0f));
+    flowTrack_.setInterceptsMouseClicks(false,false);
+    addChildComponent(flowTrack_);
+    programEyebrow_.setText("PROGRAM", juce::dontSendNotification);
+    programEyebrow_.setColour(juce::Label::textColourId, vox::ui::tokens::colour::textMuted);
+    programEyebrow_.setFont(vox::ui::typography::eyebrow());
+    programEyebrow_.setJustificationType(juce::Justification::centredRight);
+    programName_.setFont(vox::ui::typography::sectionTitle());
+    programName_.setJustificationType(juce::Justification::centredRight);
+    programName_.setColour(juce::Label::textColourId, vox::ui::tokens::colour::text);
+    for (auto* label : { &programEyebrow_, &programName_ }) {
+        label->setInterceptsMouseClicks(false,false);
+        addAndMakeVisible(*label);
+    }
+    eventChart_.setInterceptsMouseClicks(false,false);
+    addChildComponent(eventChart_);
+    keyboard_.setAccent (vox::ui::tokens::colour::fx::accent);
+    // Recipe controls re-parented into the PERFORM Program-Generator module.
+    generatorPanel().styleSelector().setSelectedId (processor_.generatorState().style + 1, juce::dontSendNotification);
+    generatorPanel().complexitySelector().setSelectedId (processor_.generatorState().complexity, juce::dontSendNotification);
+    // (reference composition). They are GeneratorPanel members; the panel
+    // owns them visually now, the overlay keeps its own controls.
+    for (auto* control : std::array<juce::Component*,18>{
+             &generatorPanel().styleSelector(), &generatorPanel().complexitySelector(),
+             &generatorPanel().intensitySlider(), &generatorPanel().energySlider(),
+             &generatorPanel().stereoSlider(),
+             &generatorPanel().fieldLock(0), &generatorPanel().fieldLock(1),
+             &generatorPanel().fieldLock(2), &generatorPanel().fieldLock(3),
+             &generatorPanel().fieldLock(4), &generatorPanel().fieldLock(5),
+             &generatorPanel().fieldLock(6), &generatorPanel().fieldLock(7),
+             &generatorPanel().fieldLock(8), &generatorPanel().fieldLock(9),
+             &generatorPanel().fieldLock(10), &generatorPanel().fieldLock(11),
+             &sourcePanel_.rootSelector() })
+        addChildComponent (control);
+    // Recipe dials are VoxKnobs constructed Small (reference dial size).
+    // Eight visible macro knobs bound to the real host macro parameters.
+    for(std::size_t i=0;i<macroKnobs_.size();++i){
+        const auto macroNames=std::array<juce::String,8> { "Intensity", "Motion", "Brightness",
+            "Space", "Texture", "Length", "Impact", "Width" }; // reference M1..M8 captions
+        const auto name=juce::String("M")+juce::String(static_cast<int>(i+1))+u8(" \u00b7 ")+macroNames[i];
+        macroKnobs_[i].setLabel(name);
+        macroKnobs_[i].setTooltip(name+u8(" — host-automatable macro value with automation readback"));
+        macroKnobs_[i].getSlider().setTitle(name);
+        macroKnobs_[i].setDoubleClickResetValue(0.5); // host macro default (0..1)
+        macroKnobAttachments_[i]=std::make_unique<juce::SliderParameterAttachment>(
+            processor_.macroParameter(i),macroKnobs_[i].getSlider(),nullptr);
+        addAndMakeVisible(macroKnobs_[i]);
+    }
+    setWorkspace(Workspace::perform);
     startTimerHz (25);
 }
 FxPanel::~FxPanel()
 {
+    // Editor close must never strand a keyboard note: release exactly the
+    // notes this control started (the processor queue outlives the panel).
+    keyboard_.releaseAllNotes();
     stopTimer();
     exportChooserOpen_=false;
     exportChooser_.reset();
@@ -1199,135 +1422,574 @@ FxPanel::~FxPanel()
 void FxPanel::paint (juce::Graphics& g)
 {
     namespace c = vox::ui::tokens::colour;
-    auto area = getLocalBounds().reduced (32);
+    namespace t = vox::ui::tokens;
+    g.fillAll (c::background);
+    // Reference product identity (PR #160 shell): raised icon square, mono
+    // eyebrow, display title — painted, no WebView, no image assets.
+    {
+        auto header = getLocalBounds().removeFromTop (52).reduced (16, 4);
+        auto icon = header.removeFromLeft (30).removeFromBottom (30).translated (0, -1);
+        g.setColour (c::panelRaised);
+        g.fillRoundedRectangle (icon.toFloat(), 6.0f);
+        g.setColour (c::fx::accent);
+        g.drawRoundedRectangle (icon.toFloat().reduced (0.5f), 6.0f, 1.0f);
+        g.setFont (vox::ui::typography::mono (12.0f));
+        g.drawText ("FX", icon, juce::Justification::centred);
+        auto id = header.removeFromLeft (240);
+        g.setColour (c::textSecondary);
+        g.setFont (vox::ui::typography::eyebrow());
+        g.drawText ("INSTRUMENT 02 / EVENT DESIGN", id.removeFromTop (13), juce::Justification::centredLeft);
+        g.setColour (c::text);
+        g.setFont (vox::ui::typography::productTitle());
+        g.drawText ("VOX FX", id.removeFromTop (24), juce::Justification::centredLeft);
+    }
+    // Module-hosted labels/summary/flow track are child components (they
+    // must paint above the module chrome).
+    if (workspace_ == Workspace::motion && !macroLabelBounds_.isEmpty()) {
+        g.setColour (c::textSecondary);
+        g.setFont (vox::ui::typography::eyebrow());
+        g.drawText ("SOURCE        TARGET                          VALUE        DEPTH",
+                    macroLabelBounds_, juce::Justification::centredLeft);
+    }
+    if (workspace_ == Workspace::process && !fxLabelBounds_.isEmpty()) {
+        g.setColour (c::textSecondary);
+        g.setFont (vox::ui::typography::eyebrow());
+        auto rest = fxLabelBounds_;
+        const int labelWidth = fxLabelBounds_.getWidth() / 4;
+        for (int i = 0; i < 4; ++i) {
+            auto column = i < 3 ? rest.removeFromLeft (labelWidth) : rest;
+            g.drawText ("FX " + juce::String (i + 1) + "            WET       AMOUNT",
+                        column.reduced (4, 0), juce::Justification::centredLeft);
+        }
+    }
+    // Real stereo peak / clip meter from rendered block samples.
+    if (meterBounds_.isEmpty()) return;
+    auto meter = meterBounds_;
+    g.setColour (c::control);
+    g.fillRoundedRectangle (meter.toFloat(), 5.0f);
+    g.setColour (c::border);
+    g.drawRoundedRectangle (meter.toFloat().reduced (0.5f), 5.0f, 1.0f);
+    auto text = meter.reduced (7, 4);
     g.setColour (c::text);
-    g.setFont (vox::ui::typography::sectionTitle());
-    g.drawText ("PERFORM  /  SOUND FAMILY", area.removeFromTop (30), juce::Justification::centredLeft);
-    g.setColour (c::textSecondary);
-    g.setFont (vox::ui::typography::controlLabel());
-    g.drawText ("One-shot event. Trigger with MIDI or audition.", area.removeFromTop (24), juce::Justification::centredLeft);
-    auto macroLabel=getLocalBounds().reduced(32).withTrimmedTop(125).removeFromLeft(200).removeFromTop(12);
-    macroLabel.translate(276,0);
-    g.drawText("SOURCE   TARGET   VALUE   DEPTH",macroLabel,juce::Justification::centredLeft);
-    auto labels=getLocalBounds().reduced(32).withTrimmedTop(197).removeFromTop(14);
-    const int labelWidth=labels.getWidth()/4;
-    for(int i=0;i<4;++i) {
-        auto column=i==3?labels:labels.removeFromLeft(labelWidth);
-        g.drawText("FX " + juce::String(i+1) + "            WET       AMOUNT",column.reduced(3,0),juce::Justification::centredLeft);
+    g.setFont (vox::ui::typography::mono (10.0f));
+    auto titleRow = text.removeFromTop (13);
+    g.drawText (clipHold_ ? "STEREO PEAK / CLIP" : "STEREO PEAK", titleRow,
+                juce::Justification::centredLeft);
+    g.setColour (c::textMuted);
+    g.drawText ("EV " + juce::String (shownEvents_) + "/8+4  GR " + juce::String (shownGrains_) +
+                    "/64  DROP " + juce::String (static_cast<juce::int64> (shownDropped_)),
+                titleRow, juce::Justification::centredRight);
+    const auto trackHeight = juce::jlimit (4, 10, text.getHeight() / static_cast<int> (shownPeaks_.size()) - 3);
+    for (std::size_t ch = 0; ch < shownPeaks_.size(); ++ch) {
+        auto row = text.removeFromTop (trackHeight);
+        g.setColour (c::text);
+        g.drawText (ch == 0 ? "L" : "R", row.removeFromLeft (12), juce::Justification::centredLeft);
+        const auto db = juce::Decibels::gainToDecibels (shownPeaks_[ch], -60.f);
+        auto track = row.reduced (0, 1).toFloat();
+        g.setColour (c::background);
+        g.fillRoundedRectangle (track, 2.f);
+        g.setColour (clipHold_ ? c::danger : c::fx::accent);
+        g.fillRoundedRectangle (track.withWidth (track.getWidth() * juce::jlimit (0.f, 1.f, (db + 60.f) / 60.f)), 2.f);
     }
-    auto meter = getLocalBounds().reduced (32).removeFromBottom (55).removeFromLeft (320).toFloat();
-    g.setColour (c::panelRaised); g.fillRoundedRectangle (meter, 4.0f);
-    g.setColour(c::text);g.setFont(vox::ui::typography::controlLabel());
-    auto text=meter.toNearestInt().reduced(8,3);
-    g.drawText(clipHold_?"STEREO PEAK  /  CLIP":"STEREO PEAK",text.removeFromTop(16),juce::Justification::centredLeft);
-    for(std::size_t ch=0;ch<shownPeaks_.size();++ch){
-        auto row=text.removeFromTop(9);
-        g.setColour(c::text);g.drawText(ch==0?"L":"R",row.removeFromLeft(15),juce::Justification::centredLeft);
-        // Map -60..0 dBFS to the bar; clip is latched from actual samples.
-        const auto db=juce::Decibels::gainToDecibels(shownPeaks_[ch],-60.f);
-        auto track=row.reduced(0,2).toFloat();
-        g.setColour(c::panel);g.fillRoundedRectangle(track,2.f);
-        g.setColour(clipHold_?c::danger:c::accent);
-        g.fillRoundedRectangle(track.withWidth(track.getWidth()*juce::jlimit(0.f,1.f,(db+60.f)/60.f)),2.f);
-    }
-    g.setColour(c::text);
-    g.drawText("EV "+juce::String(shownEvents_)+"/8+4  GR "+juce::String(shownGrains_)+"/64  DROP "+juce::String(static_cast<juce::int64>(shownDropped_)),
-               text,juce::Justification::centredLeft);
 }
 void FxPanel::resized()
 {
-    auto area = getLocalBounds().reduced (32);
-    auto actions=area.withHeight(28);
-    programCurvesButton_.setBounds(actions.removeFromRight(154));
-    sourceButton_.setBounds(actions.removeFromRight(130).reduced(2));
-    presets_.setBounds(actions.removeFromRight(141).reduced(2));
-    motionButton_.setBounds(actions.removeFromRight(90).reduced(2));
-    auto transfer=area.withTrimmedTop(30).removeFromTop(26);
-    dragGrip_.setBounds(transfer.removeFromRight(152).reduced(2));
-    prepareMidiDrag_.setBounds(transfer.removeFromRight(130).reduced(2));
-    dragWarning_.setBounds(transfer.removeFromRight(246).reduced(4,0));
-    area.removeFromTop (80);
-    output_.setBounds (area.removeFromLeft (128).removeFromTop (140));
-    duration_.setBounds (area.removeFromLeft (128).removeFromTop (140));
-    area.removeFromLeft (20);
-    auto familyArea = area.removeFromLeft (200);
-    family_.setBounds (familyArea.removeFromTop (40));
-    eventBars_.setBounds(familyArea.removeFromTop(25));
-    auto modeRow=familyArea.removeFromTop(25);
-    playMode_.setBounds(modeRow.removeFromLeft(modeRow.getWidth()/2).reduced(1));
-    triggerPolicy_.setBounds(modeRow.reduced(1));
-    clockStatus_.setBounds(familyArea.removeFromTop(12));
-    auto macroRow=familyArea.removeFromTop(32);
-    macroSelector_.setBounds(macroRow.removeFromLeft(49).reduced(1));
-    macroDestination_.setBounds(macroRow.removeFromLeft(49).reduced(1));
-    macroValue_.setBounds(macroRow.removeFromLeft(50).reduced(1));macroDepth_.setBounds(macroRow.reduced(1));
-    auto sampleRow=familyArea.removeFromTop(23);
-    sampleImport_.setBounds(sampleRow.removeFromLeft(58).reduced(1));
-    sampleBuiltin_.setBounds(sampleRow.removeFromLeft(58).reduced(1));sampleStatus_.setBounds(sampleRow.reduced(1));
-    area.removeFromLeft (20);
-    auto buttons = area.removeFromLeft (160);
-    auto auditionRow=buttons.removeFromTop(32);buttons.removeFromTop(4);
-    stopAudition_.setBounds(auditionRow.removeFromRight(58).reduced(1,0));
-    audition_.setBounds(auditionRow.reduced(1,0));
-    panic_.setBounds (buttons.removeFromTop (32)); buttons.removeFromTop (4);
-    factory_.setBounds (buttons.removeFromTop (32));
+    auto bounds = getLocalBounds();
+    // Chrome row 1: product identity (painted) + meter/clock/panic.
+    auto top = bounds.removeFromTop (52).reduced (16, 4);
+    panic_.setBounds (top.removeFromRight (88).reduced (2, 0));
+    top.removeFromRight (8);
+    clockStatus_.setBounds (top.removeFromRight (150).reduced (4, 0));
+    meterBounds_ = top.removeFromRight (250).reduced (2);
+    top.removeFromRight (10);
+    // Reference header right side: PROGRAM eyebrow + strong program name.
+    auto programArea = top.removeFromRight (240);
+    programEyebrow_.setBounds (programArea.removeFromTop (14));
+    programName_.setBounds (programArea);
+    // Chrome row 2: zone tabs (reference fx-nav) span the content width.
+    auto tabsRow = bounds.removeFromTop (38).reduced (16, 2);
+    workspaceTabs_.setBounds (tabsRow);
+    // Persistent native performance keyboard along the bottom (owner request).
+    keyboard_.setBounds (bounds.removeFromBottom (118).reduced (16, 8));
+    // Central workspace band composed of reference modules.
+    auto central = bounds.reduced (16, 6);
+    macroLabelBounds_ = {}; fxLabelBounds_ = {};
+    previewSummaryBounds_ = {}; flowTrackBounds_ = {};
+    paintLabels_.clear();
+    generatorModule_.clearWells();
+    // VoxModule::bodyArea() is module-local; panel children are placed in
+    // panel coordinates, so translate by the module position.
+    const auto bodyOf = [this] (vox::ui::VoxModule& module) {
+        auto body = module.bodyArea();
+        body.translate (module.getX(), module.getY());
+        return body;
+    };
+    const auto band = central;
+    { auto area = band; // DESIGN — four reference layer cards
+        auto row = area.removeFromTop (30);
+        sourceButton_.setBounds (row.removeFromLeft (132).reduced (2));
+        programCurvesButton_.setBounds (row.removeFromLeft (150).reduced (2));
+        area.removeFromTop (4);
+        designModule_.setBounds (area);
+        auto body = bodyOf (designModule_);
+        const int width = body.getWidth() / 4;
+        for (std::size_t i = 0; i < layers_.size(); ++i) {
+            auto card = i + 1 == layers_.size() ? body : body.removeFromLeft (width);
+            layers_[i]->setBounds (card.reduced (3));
+        }
+    }
+    { auto area = band; // PERFORM — Program Generator | Event Preview; Macros below
+        auto columns = area.removeFromTop (std::max (0, area.getHeight() - 182));
+        // Both modules fill their column: dense two-column grid per the
+        // reference (no vast empty lower workspace); the macro well is sized
+        // so its eight 60px dials render at full reference geometry.
+        auto generatorCol = columns.removeFromLeft (columns.getWidth() * 55 / 100);
+        columns.removeFromLeft (10);
+        previewModule_.setBounds (columns);
+        generatorModule_.setBounds (generatorCol);
+        macrosModule_.setBounds (area.removeFromBottom (172));
 
-    area.removeFromLeft (20);
-    auto generatorArea = area.removeFromLeft (180);
-    auto seedRow=generatorArea.removeFromTop(30);
-    generatorSettings_.setBounds(seedRow.removeFromRight(65).reduced(1));seed_.setBounds(seedRow);
-    generatorArea.removeFromTop (5);
-    generate_.setBounds (generatorArea.removeFromTop (35)); generatorArea.removeFromTop (5);
-    mutate_.setBounds (generatorArea.removeFromTop (35));
-    auto lockArea=area.removeFromLeft(100);
-    auto topLocks=lockArea.removeFromTop(30), bottomLocks=lockArea.removeFromTop(30);
-    layerLocks_[0].setBounds(topLocks.removeFromLeft(45));layerLocks_[1].setBounds(topLocks);
-    layerLocks_[2].setBounds(bottomLocks.removeFromLeft(45));layerLocks_[3].setBounds(bottomLocks);
-    lockArea.removeFromTop(4);comparison_.setBounds(lockArea.removeFromTop(24));
-    lockArea.removeFromTop(4);auto exports=lockArea.removeFromTop(24);
-    midiExport_.setBounds(exports.removeFromLeft(exports.getWidth()/2).reduced(1));wavExport_.setBounds(exports.reduced(1));
-    auto fxRow=getLocalBounds().reduced(32).withTrimmedTop(197).removeFromTop(45);
-    const int fxWidth=fxRow.getWidth()/4;
-    for (std::size_t i=0;i<4;++i) {
-        auto column=i==3?fxRow:fxRow.removeFromLeft(fxWidth);
-        column=column.reduced(3).withTrimmedTop(14);effectsType_[i].setBounds(column.removeFromLeft(column.getWidth()*4/10));
-        effectsWet_[i].setBounds(column.removeFromLeft(column.getWidth()/2));effectsAmount_[i].setBounds(column);
+        auto body = bodyOf (generatorModule_);
+        auto selectsBody = body.removeFromTop (46);
+        auto selectsLabels = selectsBody.removeFromTop (14);
+        // Reference generator-fields grid: 1.1fr / 1fr / .63fr columns.
+        const auto categoryWidth = selectsBody.getWidth() * 39 / 100;
+        const auto styleWidth = selectsBody.getWidth() * 35 / 100;
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (categoryWidth).reduced (2, 0), "CATEGORY", 1 });
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (styleWidth).reduced (2, 0), "STYLE", 1 });
+        paintLabels_.push_back ({ selectsLabels, "PITCH KEY", 1 });
+        family_.setBounds (selectsBody.removeFromLeft (categoryWidth).reduced (2, 0));
+        generatorPanel().styleSelector().setBounds (selectsBody.removeFromLeft (styleWidth).reduced (2, 0));
+        sourcePanel_.rootSelector().setBounds (selectsBody.reduced (2, 0));
+        body.removeFromTop (8);
+        // Seed strip: chip-sized seed, bars segmented select and seconds chip
+        // (reference Seed / Length row; native keeps the real bars parameter).
+        auto seedRow = body.removeFromTop (30);
+        paintLabels_.push_back ({ seedRow.removeFromLeft (38).reduced (2, 0), "SEED", 1 });
+        seed_.setBounds (seedRow.removeFromLeft (150).reduced (0, 1));
+        seedRow.removeFromLeft (10);
+        paintLabels_.push_back ({ seedRow.removeFromLeft (52).reduced (2, 0), "LENGTH", 1 });
+        eventBars_.setBounds (seedRow.removeFromLeft (110).reduced (2, 2));
+        seedRow.removeFromLeft (10);
+        paintLabels_.push_back ({ seedRow.removeFromLeft (72).reduced (2, 0), "DURATION (S)", 1 });
+        duration_.setBounds (seedRow.reduced (0, 1));
+        body.removeFromTop (12);
+        // Recipe dial well (.fx-recipe-dials): four full-size dials.
+        // Complexity is a real 1..4 layer count, so it stays a compact
+        // segmented-style select (documented deviation from the dial).
+        auto recipes = body.removeFromTop (150);
+        generatorModule_.addWell (recipes.translated (-generatorModule_.getX(), -generatorModule_.getY()));
+        const auto recipeWidth = recipes.getWidth() / 4;
+        for (int i = 0; i < 4; ++i) {
+            auto slot = i == 3 ? recipes : recipes.removeFromLeft (recipeWidth);
+            if (i == 1) {
+                paintLabels_.push_back ({ slot.removeFromTop (14).reduced (2, 0), "LAYERS", 1 });
+                slot.removeFromTop (2);
+                generatorPanel().complexitySelector().setBounds (slot.removeFromTop (30).reduced (14, 0));
+            } else {
+                auto& dial = i == 0 ? generatorPanel().intensitySlider()
+                           : i == 2 ? generatorPanel().energySlider()
+                                    : generatorPanel().stereoSlider();
+                dial.setBounds (slot);
+            }
+        }
+        body.removeFromTop (12);
+        auto locksBody = body.removeFromTop (14 + 2 + 26 + 26);
+        paintLabels_.push_back ({ locksBody.removeFromTop (14).reduced (2, 0), "KEEP ON GENERATE", 1 });
+        locksBody.removeFromTop (2);
+        auto locks = locksBody.removeFromTop (26);
+        for (int i = 0; i < 6; ++i)
+            generatorPanel().fieldLock (static_cast<std::size_t> (i)).setBounds (locks.removeFromLeft (locks.getWidth() / 6).reduced (2));
+        auto locks2 = locksBody.removeFromTop (26);
+        for (int i = 6; i < 12; ++i)
+            generatorPanel().fieldLock (static_cast<std::size_t> (i)).setBounds (locks2.removeFromLeft (locks2.getWidth() / 6).reduced (2));
+        auto actions = body.removeFromBottom (34);
+        generate_.setBounds (actions.removeFromLeft (168).reduced (2));
+        mutate_.setBounds (actions.removeFromLeft (120).reduced (2));
+        actions.removeFromLeft (6);
+        generatorSettings_.setBounds (actions.removeFromLeft (110).reduced (2));
+        paintLabels_.push_back ({ actions.removeFromRight (actions.getWidth() - 410), u8("Creates editable Program data \u00b7 host automation unchanged"), 1 });
+
+        auto previewBody = bodyOf (previewModule_);
+        previewSummaryBounds_ = previewBody.removeFromTop (66);
+        paintLabels_.push_back ({ previewSummaryBounds_.removeFromTop (14).reduced (2, 0), "SELECTED PROGRAM", 1 });
+        previewName_.setBounds (previewSummaryBounds_.removeFromTop (30));
+        previewMeta_.setBounds (previewSummaryBounds_);
+        previewBody.removeFromTop (8);
+        paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "EVENT PHASE", 1 });
+        const auto configured = processor_.durationParameter().get();
+        paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0),
+            juce::String (configured, 2) + " s configured", 1 });
+        previewBody.removeFromTop (6);
+        paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "MODE / TRIGGER POLICY", 1 });
+        playMode_.setBounds (previewBody.removeFromTop (26).reduced (2));
+        previewBody.removeFromTop (4);
+        triggerPolicy_.setBounds (previewBody.removeFromTop (26).reduced (2));
+        previewBody.removeFromTop (8);
+        paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "LOAD SEED PROGRAM / COMPARE", 1 });
+        factory_.setBounds (previewBody.removeFromTop (26).reduced (2));
+        previewBody.removeFromTop (4);
+        comparison_.setBounds (previewBody.removeFromTop (26).reduced (2));
+        previewBody.removeFromTop (10);
+        auto previewActions = previewBody.removeFromBottom (34);
+        audition_.setBounds (previewActions.removeFromLeft (140).reduced (2));
+        stopAudition_.setBounds (previewActions.removeFromLeft (110).reduced (2));
+        // The event chart (real program trajectory) fills the remaining band.
+        eventChart_.setVisible (workspace_ == Workspace::perform);
+        eventChart_.setBounds (previewBody);
+
+        auto macrosBody = bodyOf (macrosModule_);
+        macrosModule_.addWell (macrosBody);
+        auto well = macrosBody.reduced (10, 8); // grouped macro well padding
+        const int knobWidth = well.getWidth() / static_cast<int> (macroKnobs_.size());
+        for (std::size_t i = 0; i < macroKnobs_.size(); ++i) {
+            auto slot = i + 1 == macroKnobs_.size() ? well : well.removeFromLeft (knobWidth);
+            macroKnobs_[i].setBounds (slot.reduced (2));
+        }
     }
-    auto meterHeader=getLocalBounds().reduced(32).removeFromBottom(55).removeFromLeft(320).reduced(8,3).removeFromTop(16);
-    fxTailStatus_.setBounds(meterHeader.removeFromRight(100));
-    auto patternRow=getLocalBounds().reduced(32).removeFromBottom(55);
-    patternActions_.setBounds(patternRow.removeFromLeft(80).reduced(2,8));
-    patternRow.removeFromLeft(260);
-    patternSelector_.setBounds(patternRow.removeFromLeft(190).reduced(0,8));
-    patternRow.removeFromLeft(10);
-    patternEnabled_.setBounds(patternRow.removeFromLeft(160).reduced(0,8));
-    patternRow.removeFromLeft(8);patternStepSelector_.setBounds(patternRow.removeFromLeft(56).reduced(0,8));
-    const int detailWidth=patternRow.getWidth()/4;
-    for(std::size_t i=0;i<patternDetails_.size();++i){auto area=i==3?patternRow:patternRow.removeFromLeft(detailWidth);
-        patternDetails_[i].setBounds(area.reduced(1));}
-    auto stepRow=getLocalBounds().reduced(32).removeFromBottom(115).removeFromTop(35);
-    patternLength_.setBounds(stepRow.removeFromLeft(85).reduced(2));
-    patternBar_.setBounds(stepRow.removeFromLeft(80).reduced(2));
-    patternGrid_.setBounds(stepRow.removeFromLeft(75).reduced(2));
-    patternPage_.setBounds(stepRow.removeFromLeft(75).reduced(2));
-    patternSwing_.setBounds(stepRow.removeFromLeft(75).reduced(2));
-    const int stepWidth=stepRow.getWidth()/16;
-    for(std::size_t i=0;i<patternSteps_.size();++i){auto area=i==15?stepRow:stepRow.removeFromLeft(stepWidth);
-        patternSteps_[i].setBounds(area.reduced(2));}
-    auto row = getLocalBounds().reduced(32);
-    row.removeFromTop(247);
-    row.removeFromBottom(120);
-    generatorPanel_->setBounds(getLocalBounds().withSizeKeepingCentre(768,372));
-    sourcePanel_.setBounds(getLocalBounds().withSizeKeepingCentre(665,301));
-    motionPanel_.setBounds(getLocalBounds().withSizeKeepingCentre(848,580));
-    browser_.setBounds(getLocalBounds().withSizeKeepingCentre(920,456));
-    wavOptions_.setBounds(getLocalBounds().withSizeKeepingCentre(470,232));
-    programCurves_.setBounds(row.reduced(3));
-    const int width = row.getWidth() / 4;
-    for (std::size_t i=0; i<layers_.size(); ++i) {
-        auto card = i + 1 == layers_.size() ? row : row.removeFromLeft(width);
-        layers_[i]->setBounds(card.reduced(3));
+    { auto area = band; // TIMELINE
+        timelineModule_.setBounds (area);
+        programCurves_.setBounds (bodyOf (timelineModule_));
     }
+    { auto area = band; // MOTION
+        motionModule_.setBounds (area);
+        auto body = bodyOf (motionModule_);
+        macroLabelBounds_ = body.removeFromTop (14).reduced (4, 0);
+        auto macro = body.removeFromTop (34);
+        macroSelector_.setBounds (macro.removeFromLeft (74).reduced (2));
+        macroDestination_.setBounds (macro.removeFromLeft (180).reduced (2));
+        macroValue_.setBounds (macro.removeFromLeft (110).reduced (2));
+        macroDepth_.setBounds (macro.reduced (2));
+        body.removeFromTop (4);
+        motionPanel_.setBounds (body);
+    }
+    { auto area = band; // PROCESS
+        flowModule_.setBounds (area.removeFromTop (64));
+        flowTrackBounds_ = bodyOf (flowModule_);
+        area.removeFromTop (8);
+        auto slotsRow = area.removeFromTop (170);
+        slotsModule_.setBounds (slotsRow);
+        auto slotsBody = bodyOf (slotsModule_);
+        fxLabelBounds_ = slotsBody.removeFromTop (14);
+        auto fxRow = slotsBody.removeFromTop (120);
+        const int fxWidth = fxRow.getWidth() / 4;
+        for (std::size_t i = 0; i < 4; ++i) {
+            auto column = i == 3 ? fxRow : fxRow.removeFromLeft (fxWidth);
+            column = column.reduced (4);
+            effectsType_[i].setBounds (column.removeFromLeft (column.getWidth() * 4 / 10));
+            effectsWet_[i].setBounds (column.removeFromLeft (column.getWidth() / 2));
+            effectsAmount_[i].setBounds (column);
+        }
+        area.removeFromTop (8);
+        outputModule_.setBounds (area);
+        flowTrack_.setVisible (workspace_ == Workspace::process);
+        flowTrack_.setBounds (bodyOf (flowModule_));
+        auto outputBody = bodyOf (outputModule_);
+        output_.setBounds (outputBody.removeFromLeft (140).reduced (2));
+        fxTailStatus_.setBounds (outputBody.removeFromRight (260));
+    }
+    { auto area = band; // TRIGGER
+        patternModule_.setBounds (area);
+        auto body = bodyOf (patternModule_);
+        auto selectsBody = body.removeFromTop (46);
+        auto selectsLabels = selectsBody.removeFromTop (14);
+        auto selects = selectsBody;
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (96).reduced (2, 0), "TRIGGER MODE", 5 });
+        patternActions_.setBounds (selects.removeFromLeft (96).reduced (2, 0));
+        selects.removeFromLeft (8);
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (150).reduced (2, 0), "TRIGGER PATTERN RATE", 5 });
+        patternSelector_.setBounds (selects.removeFromLeft (150).reduced (2, 0));
+        selects.removeFromLeft (8);
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (130).reduced (2, 0), "TRIGGER PATTERN BARS", 5 });
+        patternLength_.setBounds (selects.removeFromLeft (110).reduced (2, 0));
+        selects.removeFromLeft (8);
+        selectsLabels.removeFromLeft (110); // keep label strip in sync (no extra title)
+        patternBar_.setBounds (selects.removeFromLeft (100).reduced (2, 0));
+        selects.removeFromLeft (8);
+        patternPage_.setBounds (selects.removeFromLeft (100).reduced (2, 0));
+        selects.removeFromLeft (8);
+        patternEnabled_.setBounds (selects.removeFromLeft (170).reduced (2, 0));
+        // Step option strip (note/velocity/probability/ratchet) + grid row.
+        auto stepOpts = body.removeFromTop (30);
+        patternStepSelector_.setBounds (stepOpts.removeFromLeft (90).reduced (2));
+        stepOpts.removeFromLeft (8);
+        patternGrid_.setBounds (stepOpts.removeFromLeft (100).reduced (2));
+        stepOpts.removeFromLeft (8);
+        patternSwing_.setBounds (stepOpts.removeFromLeft (stepOpts.getWidth() * 40 / 100).reduced (2));
+        auto details = body.removeFromTop (30);
+        const int detailWidth = details.getWidth() / 4;
+        for (std::size_t i = 0; i < patternDetails_.size(); ++i) {
+            auto slot = i == 3 ? details : details.removeFromLeft (detailWidth);
+            paintLabels_.push_back ({ slot.removeFromTop (12).reduced (2, 0),
+                std::array<juce::String,4> { "NOTE", "VELOCITY", "PROBABILITY", "RATCHET" }[i], 5 });
+            patternDetails_[i].setBounds (slot.reduced (2));
+        }
+        auto stepRow = body.removeFromTop (54);
+        const int stepWidth = stepRow.getWidth() / 16;
+        for (std::size_t i = 0; i < patternSteps_.size(); ++i) {
+            auto slot = i == 15 ? stepRow : stepRow.removeFromLeft (stepWidth);
+            patternSteps_[i].setBounds (slot.reduced (2));
+        }
+        auto exportRow = body.removeFromTop (34);
+        midiExport_.setBounds (exportRow.removeFromLeft (150).reduced (2));
+    }
+    { auto area = band; // PRESETS
+        presetsModule_.setBounds (area);
+        browser_.setBounds (bodyOf (presetsModule_));
+    }
+    { auto area = band; // ADVANCED
+        advancedModule_.setBounds (area);
+        auto body = bodyOf (advancedModule_);
+        auto sampleRow = body.removeFromTop (34);
+        sampleImport_.setBounds (sampleRow.removeFromLeft (130).reduced (2));
+        sampleBuiltin_.setBounds (sampleRow.removeFromLeft (130).reduced (2));
+        sampleStatus_.setBounds (sampleRow.reduced (2));
+        auto exportRow = body.removeFromTop (34);
+        wavExport_.setBounds (exportRow.removeFromLeft (130).reduced (2));
+        auto transfer = body.removeFromTop (34);
+        dragGrip_.setBounds (transfer.removeFromRight (190).reduced (2));
+        prepareMidiDrag_.setBounds (transfer.removeFromRight (180).reduced (2));
+        dragWarning_.setBounds (transfer.reduced (4, 0));
+    }
+    // Overlay panels keep their existing centred geometry.
+    generatorPanel_->setBounds (getLocalBounds().withSizeKeepingCentre (768, 372));
+    sourcePanel_.setBounds (getLocalBounds().withSizeKeepingCentre (665, 301));
+    wavOptions_.setBounds (getLocalBounds().withSizeKeepingCentre (470, 232));
+    syncModuleLabels();
+}
+void FxPanel::syncModuleLabels()
+{
+    for (auto& label : moduleLabels_) label.setVisible (false);
+    std::size_t used = 0;
+    for (const auto& entry : paintLabels_) {
+        if (used >= moduleLabels_.size()) break;
+        auto& label = moduleLabels_[used++];
+        label.setText (entry.text, juce::dontSendNotification);
+        label.setBounds (entry.bounds);
+        label.setVisible (static_cast<int> (workspace_) == entry.workspace);
+        label.toFront (false);
+    }
+    previewName_.setVisible (workspace_ == Workspace::perform);
+    previewMeta_.setVisible (workspace_ == Workspace::perform);
+    const auto family = family_.getSelectedId() > 0
+        ? family_.getItemText (family_.getSelectedId() - 1) : juce::String ("--");
+    // Native Programs are procedural seeds (no authored name field); the
+    // Selected Program header shows the honest seed identity.
+    const auto seedIdentity = u8("Seed ") + juce::String (processor_.generatorState().seed)
+        + u8(" \u00b7 ") + family;
+    previewName_.setText (seedIdentity, juce::dontSendNotification);
+    programName_.setText (seedIdentity, juce::dontSendNotification);
+    previewMeta_.setText (playMode_.getItemText (juce::jmax (0, playMode_.getSelectedId() - 1)) + " / " +
+        triggerPolicy_.getItemText (juce::jmax (0, triggerPolicy_.getSelectedId() - 1)) +
+        u8("  \u00b7  Live DSP event engine"), juce::dontSendNotification);
+    flowTrack_.setVisible (workspace_ == Workspace::process);
+}
+void FxPanel::EventChart::paint (juce::Graphics& g)
+{
+    namespace c = vox::ui::tokens::colour;
+    const auto program = processor.program();
+    auto area = getLocalBounds();
+    auto phaseStrip = area.removeFromBottom (20).toFloat().reduced (0, 4);
+    const auto chart = area.toFloat().reduced (1);
+    // Grid: 5 vertical / 4 horizontal hairlines (reference event chart).
+    g.setColour (c::borderSubtle);
+    for (int i = 1; i < 5; ++i)
+        g.drawVerticalLine (static_cast<int> (chart.getX() + chart.getWidth() * i / 5.0f),
+                            chart.getY(), chart.getBottom());
+    for (int i = 1; i < 4; ++i)
+        g.drawHorizontalLine (static_cast<int> (chart.getY() + chart.getHeight() * i / 4.0f),
+                              chart.getX(), chart.getRight());
+    // Real program data: the program-wide amplitude trajectory.
+    juce::Path path;
+    constexpr int steps = 96;
+    for (int i = 0; i <= steps; ++i)
+    {
+        const float phase = i / static_cast<float> (steps);
+        const float value = juce::jlimit (0.0f, 1.0f, program.amplitudeCurve.evaluate (phase));
+        const float x = chart.getX() + phase * chart.getWidth();
+        const float y = chart.getBottom() - value * chart.getHeight();
+        if (i == 0) path.startNewSubPath (x, y); else path.lineTo (x, y);
+    }
+    g.setColour (c::themeAccent);
+    g.strokePath (path, juce::PathStrokeType (2.0f));
+    // Enabled layer spans as dim markers across the chart top.
+    g.setColour (c::themeAccentDim);
+    for (const auto& layer : program.layers)
+        if (layer.enabled)
+            g.drawHorizontalLine (static_cast<int> (chart.getY()) + 3,
+                chart.getX() + layer.timing.offset * chart.getWidth(),
+                chart.getX() + (layer.timing.offset + layer.timing.span) * chart.getWidth());
+    // Configured phase strip: equal segments, no fake fill.
+    g.setColour (c::border);
+    for (int i = 0; i < 24; ++i)
+    {
+        const auto segment = phaseStrip.removeFromLeft (phaseStrip.getWidth() / (24 - i));
+        g.fillRoundedRectangle (segment.reduced (1, 6), 2.0f);
+    }
+}
+
+void FxPanel::FlowTrack::paint (juce::Graphics& g)
+{
+    namespace c = vox::ui::tokens::colour;
+    namespace ty = vox::ui::typography;
+    auto track = getLocalBounds().reduced (2, 4);
+    auto chip = [&] (juce::String label, bool active) {
+        juce::GlyphArrangement glyphs;
+        glyphs.addLineOfText (ty::badge(), label, 0.0f, 0.0f);
+        const auto bounds = track.removeFromLeft (
+            static_cast<int> (glyphs.getBoundingBox (0, -1, true).getWidth()) + 20);
+        g.setColour (c::control);
+        g.fillRoundedRectangle (bounds.toFloat(), 5.0f);
+        g.setColour (active ? c::fx::accent.withAlpha (0.55f) : c::border);
+        g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 5.0f, 1.0f);
+        g.setColour (active ? c::fx::accent : c::textSecondary);
+        g.setFont (ty::badge());
+        g.drawText (label, bounds, juce::Justification::centred);
+        track.removeFromLeft (16);
+        g.setColour (c::textMuted);
+        g.drawText (">", track.removeFromLeft (12), juce::Justification::centred);
+    };
+    chip ("A-D SUM", false);
+    for (int i = 0; i < 4; ++i)
+        chip (slots[i], active[i]);
+    chip ("MASTER", false);
+}
+
+namespace {
+juce::String workspaceTitle (FxPanel::Workspace workspace)
+{
+    using W = FxPanel::Workspace;
+    switch (workspace) {
+    case W::design:   return u8("DESIGN  ·  LAYERS A-D");
+    case W::perform:  return u8("PERFORM  ·  PROGRAM / MODE / MACROS");
+    case W::timeline: return u8("TIMELINE  ·  20 PROGRAM CURVES");
+    case W::motion:   return u8("MOTION  ·  LFO / STEP / ADSR / MATRIX");
+    case W::process:  return u8("PROCESS  ·  FOUR REAL FX SLOTS");
+    case W::trigger:  return u8("TRIGGER / PATTERN  ·  1-4 BARS");
+    case W::presets:  return u8("PRESETS  ·  FACTORY / USER / A-B");
+    case W::advanced: return u8("ADVANCED  ·  SAMPLE / EXPORT / DIAGNOSTICS");
+    case W::count:    break;
+    }
+    return "";
+}
+} // namespace
+void FxPanel::openTimelineCurve (std::size_t layer, int kind)
+{
+    if (layer >= layers_.size() || kind < 0 || kind > 3) return;
+    setWorkspace (Workspace::timeline);
+    // Scope = Layer A..D (ids 2..5), kind = Amplitude/Pitch/Cutoff/Panorama.
+    programCurves_.scopeSelector().setSelectedId (static_cast<int> (layer) + 2, juce::sendNotificationSync);
+    programCurves_.selector().setSelectedId (kind + 1, juce::sendNotificationSync);
+}
+void FxPanel::setWorkspace (Workspace workspace)
+{
+    if (static_cast<int> (workspace) < 0 || static_cast<int> (workspace) >= workspaceCount) return;
+    workspace_ = workspace;
+    resized(); // relayout: per-workspace geometry, labels and wells are rebuilt
+    applyWorkspaceVisibility();
+    syncingTabs_ = true;
+    const int tabPosition = workspace == Workspace::design ? 1
+                          : workspace == Workspace::perform ? 0
+                          : static_cast<int> (workspace);
+    workspaceTabs_.setSelectedIndex (tabPosition);
+    syncingTabs_ = false;
+    const bool timeline = workspace_ == Workspace::timeline;
+    programCurvesButton_.setToggleState (timeline, juce::dontSendNotification);
+    programCurvesButton_.setButtonText (timeline ? "Layer cards" : "Program curves");
+    if (timeline) programCurves_.refresh();
+    workspaceHeader_.setTitle (workspaceTitle (workspace_));
+    repaint();
+    resized();
+}
+void FxPanel::applyWorkspaceVisibility()
+{
+    // Fail-safe: hide everything first, then mark the live workspace's
+    // controls. Retired or not-yet-laid-out controls can never leak through.
+    for (auto* child : getChildren()) child->setVisible (false);
+    const auto show = [this] (juce::Component& component, bool visible) { component.setVisible (visible); };
+    const bool design = workspace_ == Workspace::design;
+    const bool perform = workspace_ == Workspace::perform;
+    const bool timeline = workspace_ == Workspace::timeline;
+    const bool motion = workspace_ == Workspace::motion;
+    const bool process = workspace_ == Workspace::process;
+    const bool trigger = workspace_ == Workspace::trigger;
+    const bool presets = workspace_ == Workspace::presets;
+    const bool advanced = workspace_ == Workspace::advanced;
+    // DESIGN: four layer cards, source and curves entry points. Generator
+    // layer locks live in the generator panel (not laid out in DESIGN).
+    for (auto& layer : layers_) show (*layer, design);
+    show (sourceButton_, design);
+    show (programCurvesButton_, design); // Design entry point only; the tab strip owns TIMELINE
+    show (programCurves_, timeline);
+    // PERFORM: reference composition — Program Generator (category/style,
+    // seed/length, recipe dials, locks, generate), Event Preview (program
+    // select/A-B/audition), Performance Macros (8 host knobs).
+    show (generatorModule_, perform); show (previewModule_, perform);
+    show (macrosModule_, perform);
+    show (family_, perform);
+    show (sourcePanel_.rootSelector(), perform);
+    show (generatorPanel().styleSelector(), perform);
+    show (seed_, perform); show (duration_, perform); show (eventBars_, perform);
+    show (generatorPanel().intensitySlider(), perform);
+    show (generatorPanel().complexitySelector(), perform);
+    show (generatorPanel().energySlider(), perform);
+    show (generatorPanel().stereoSlider(), perform);
+    for (std::size_t i = 0; i < 12; ++i) show (generatorPanel().fieldLock (i), perform);
+    show (generate_, perform); show (mutate_, perform); show (generatorSettings_, perform);
+    show (factory_, perform); show (comparison_, perform);
+    show (playMode_, perform); show (triggerPolicy_, perform);
+    show (audition_, perform); show (stopAudition_, perform);
+    for (auto& knob : macroKnobs_) show (knob, perform);
+    show (designModule_, design); show (timelineModule_, timeline);
+    // Routing editor (assignment/readback) lives with Motion; the eight
+    // performance knobs stay in PERFORM.
+    show (macroSelector_, motion); show (macroDestination_, motion);
+    show (macroValue_, motion); show (macroDepth_, motion);
+    // MOTION / PROCESS / TRIGGER / PRESETS / ADVANCED. Motion and Presets
+    // are real embedded workspace panels now (no single-button overlays).
+    show (motionModule_, motion);
+    show (motionPanel_, motion);
+    show (flowModule_, process); show (slotsModule_, process); show (outputModule_, process);
+    show (output_, process);
+    show (patternModule_, trigger);
+    show (presetsModule_, presets);
+    show (browser_, presets);
+    if (workspace_ == Workspace::motion) motionPanel_.refresh();
+    if (workspace_ == Workspace::presets) browser_.open();
+    for (std::size_t i = 0; i < effectsType_.size(); ++i) {
+        show (effectsType_[i], process);
+        show (effectsWet_[i], process);
+        show (effectsAmount_[i], process);
+    }
+    show (fxTailStatus_, process);
+    show (patternActions_, trigger); show (patternSelector_, trigger);
+    show (patternEnabled_, trigger); show (patternStepSelector_, trigger);
+    for (auto& detail : patternDetails_) show (detail, trigger);
+    show (patternSwing_, trigger);
+    show (patternLength_, trigger); show (patternBar_, trigger);
+    show (patternGrid_, trigger); show (patternPage_, trigger);
+    for (auto& step : patternSteps_) show (step, trigger);
+    show (midiExport_, trigger);
+    show (advancedModule_, advanced);
+    show (sampleImport_, advanced); show (sampleBuiltin_, advanced);
+    show (sampleStatus_, advanced);
+    show (wavExport_, advanced);
+    show (dragGrip_, advanced); show (prepareMidiDrag_, advanced);
+    show (dragWarning_, advanced);
+    // Always visible: chrome, keyboard, panic, clock and overlays themselves.
+    show (workspaceTabs_, true);
+    show (workspaceHeader_, false); // identity is painted in the chrome row
+    show (programEyebrow_, true);
+    show (programName_, true);
+    show (panic_, true);
+    show (clockStatus_, true);
+    show (keyboard_, true);
+    syncModuleLabels();
+}
+void FxPanel::focusLost (juce::Component::FocusChangeType)
+{
+    // Losing focus (clicking the DAW, tabbing away) never strands a note.
+    keyboard_.releaseAllNotes();
 }
 void FxPanel::choosePreset(bool saving){
     presetChooser_=std::make_unique<juce::FileChooser>(saving?"Save VOX FX user sound":"Load VOX FX user sound",
@@ -1424,7 +2086,7 @@ void FxPanel::exportPattern(bool drag)
     const auto bpm=processor_.observedTempo();
     if(bpm<10.0||bpm>1000.0) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-            "MIDI export failed","The captured host tempo is outside the supported MIDI export range (10–1000 BPM).");return;
+            "MIDI export failed",u8("The captured host tempo is outside the supported MIDI export range (10–1000 BPM)."));return;
     }
     if(drag){
         if(!processor_.prepareMidiDrag(pattern,bpm))
@@ -1557,6 +2219,15 @@ void FxPanel::refreshMacro()
         if(config.routes[i].source==source&&config.routes[i].destination==destination){depth=config.routes[i].depth;break;}
     if(!macroDepth_.isMouseButtonDown()&&!macroDepth_.hasKeyboardFocus(true))macroDepth_.setValue(depth,juce::dontSendNotification);
 }
+void FxPanel::refreshEffectSemantics(std::size_t index)
+{
+    if(index>=effectsType_.size())return;
+    const auto type=static_cast<effects::Type>(std::max(0,effectsType_[index].getSelectedId()-1));
+    const auto prefix="Slot "+juce::String(static_cast<int>(index+1))+" ";
+    effectsAmount_[index].setTitle(prefix+effects::amountLabel(type));
+    effectsAmount_[index].setTooltip(effects::amountHelp(type));
+    effectsWet_[index].setTooltip("Host-automatable wet mix for the selected effect type");
+}
 void FxPanel::refreshExportControls()
 {
     using Kind=fileexport::Kind;
@@ -1574,23 +2245,23 @@ void FxPanel::refreshExportControls()
     wavExport_.setEnabled(!exportChooserOpen_&&!midiBusy&&!active);
     prepareMidiDrag_.setEnabled(!exportChooserOpen_&&!status&&!active);
     dragGrip_.setEnabled(!exportChooserOpen_&&!status&&ready&&!active);
-    const auto dragLabel=active?"Dragging…":preparing?"Preparing drag…":unavailable?"Snapshot unavailable":ready?
-        (dragFailed_?"Drag failed · retry":dragState==DragState::wav?"Drag WAV snapshot":"Drag MIDI snapshot"):
+    const auto dragLabel=active?u8("Dragging…"):preparing?u8("Preparing drag…"):unavailable?"Snapshot unavailable":ready?
+        (dragFailed_?u8("Drag failed · retry"):dragState==DragState::wav?"Drag WAV snapshot":"Drag MIDI snapshot"):
         "No drag file";
     if(dragGrip_.getButtonText()!=dragLabel)dragGrip_.setButtonText(dragLabel);
     const auto dragHelp=unavailable?
         "The prepared temporary file is missing, incomplete, or unreadable. It is not recreated automatically. Use Prepare MIDI drag or WAV > Prepare drag to explicitly render a replacement; Save remains separate.":
         "Drag a prepared WAV or MIDI snapshot. Copy imports into the DAW project; use Save for a lasting file path.";
     if(dragGrip_.getTooltip()!=dragHelp){dragGrip_.setTooltip(dragHelp);dragGrip_.setDescription(dragHelp);}
-    const auto warning=unavailable?(preparing?"Preparing replacement snapshot…":"Snapshot unavailable · prepare again"):
-        "Copy into project · Save for a lasting file";
+    const auto warning=unavailable?(preparing?u8("Preparing replacement snapshot…"):u8("Snapshot unavailable · prepare again")):
+        u8("Copy into project · Save for a lasting file");
     if(dragWarning_.getText()!=warning)dragWarning_.setText(warning,juce::dontSendNotification);
     const auto warningHelp=unavailable?
         "The temporary drag file is no longer available. VOX FX will not silently recreate it or delete a file already handed to the OS. Prepare a fresh WAV or MIDI snapshot explicitly.":
         "Temporary files may expire. Availability is checked when dragging; the OS may still read later after that check. Copy imports into the project; handed-off files are retained even after canceled drops.";
     if(dragWarning_.getTooltip()!=warningHelp)dragWarning_.setTooltip(warningHelp);
     if(status){
-        const auto label=status->committing?juce::String("Saving…"):status->cancelling?juce::String("Cancelling…"):
+        const auto label=status->committing?juce::String(u8("Saving…")):status->cancelling?juce::String(u8("Cancelling…")):
             wavBusy?juce::String(static_cast<int>(status->progress*100))+"%":juce::String("Cancel");
         (wavBusy?wavExport_:midiExport_).setButtonText(label);
     }
@@ -1614,6 +2285,22 @@ void FxPanel::timerCallback()
     }
     refreshExportControls();
     if (!isShowing()) return;
+    keyboard_.setExternalNotes(processor_.hostNoteMask());
+    keyboard_.setEventMode(processor_.program().mode==PlayMode::oneShot);
+    for (std::size_t i = 0; i < 4; ++i) {
+        flowTrack_.active[i] = effectsType_[i].getSelectedId() > 1;
+        flowTrack_.slots[i] = juce::String ("0") + juce::String (static_cast<int> (i + 1)) + " " +
+            effectsType_[i].getItemText (juce::jmax (0, effectsType_[i].getSelectedId() - 1));
+    }
+    if (workspace_ == Workspace::perform) {
+        const auto family = family_.getSelectedId() > 0
+            ? family_.getItemText (family_.getSelectedId() - 1) : juce::String ("--");
+        previewName_.setText (u8("Seed ") + juce::String (processor_.generatorState().seed)
+            + u8(" \u00b7 ") + family, juce::dontSendNotification);
+        previewMeta_.setText (playMode_.getItemText (juce::jmax (0, playMode_.getSelectedId() - 1)) + " / " +
+            triggerPolicy_.getItemText (juce::jmax (0, triggerPolicy_.getSelectedId() - 1)) +
+            u8("  \u00b7  Live DSP event engine"), juce::dontSendNotification);
+    }
     const auto sample=processor_.sampleSnapshot();
     using Status=sample::Controller::Status;
     const char* text=sample.status==Status::builtin?"Built-in":sample.status==Status::loading?"Loading":
@@ -1631,19 +2318,19 @@ void FxPanel::timerCallback()
     const auto program = processor_.program();
     using Clock=FxProcessor::PatternClock;
     const auto clock=processor_.patternClock();
-    const char* patternLabel="HOST PATTERN";
-    const char* patternHelp="Use host PPQ to play the trigger Pattern. Sequence mode also uses this Pattern.";
+    juce::String patternLabel="HOST PATTERN";
+    juce::String patternHelp="Use host PPQ to play the trigger Pattern. Sequence mode also uses this Pattern.";
     switch(clock){
         case Clock::inactive: break;
         case Clock::ready44: patternHelp="Host Pattern: synchronized in 4/4.";break;
-        case Clock::readyAssumed44: patternLabel="PATTERN · 4/4*";patternHelp="Time signature unavailable. Pattern assumes 4/4 for compatibility.";break;
-        case Clock::noPlayhead: patternLabel="PATTERN · NO CLOCK";patternHelp="The host did not report transport position.";break;
-        case Clock::stopped: patternLabel="PATTERN · STOPPED";patternHelp="Start the host transport to play the Pattern.";break;
-        case Clock::invalidPpq: patternLabel="PATTERN · NO PPQ";patternHelp="Host beat position is missing or outside the supported range.";break;
-        case Clock::invalidTempo: patternLabel="PATTERN · BPM";patternHelp="Host Pattern requires a valid tempo from 10 to 1000 BPM.";break;
-        case Clock::unsupportedMeter: patternLabel="PATTERN · METER";patternHelp="Host Pattern does not play in a reported time signature other than 4/4.";break;
-        case Clock::waitingForState: patternLabel="PATTERN · WAITING";patternHelp="Waiting for the new Program and Pattern state.";break;
-        case Clock::blockRejected: patternLabel="PATTERN · BLOCK";patternHelp="This host block cannot be scheduled within the Pattern work limit.";break;
+        case Clock::readyAssumed44: patternLabel=u8("PATTERN · 4/4*");patternHelp="Time signature unavailable. Pattern assumes 4/4 for compatibility.";break;
+        case Clock::noPlayhead: patternLabel=u8("PATTERN · NO CLOCK");patternHelp="The host did not report transport position.";break;
+        case Clock::stopped: patternLabel=u8("PATTERN · STOPPED");patternHelp="Start the host transport to play the Pattern.";break;
+        case Clock::invalidPpq: patternLabel=u8("PATTERN · NO PPQ");patternHelp="Host beat position is missing or outside the supported range.";break;
+        case Clock::invalidTempo: patternLabel=u8("PATTERN · BPM");patternHelp="Host Pattern requires a valid tempo from 10 to 1000 BPM.";break;
+        case Clock::unsupportedMeter: patternLabel=u8("PATTERN · METER");patternHelp="Host Pattern does not play in a reported time signature other than 4/4.";break;
+        case Clock::waitingForState: patternLabel=u8("PATTERN · WAITING");patternHelp="Waiting for the new Program and Pattern state.";break;
+        case Clock::blockRejected: patternLabel=u8("PATTERN · BLOCK");patternHelp="This host block cannot be scheduled within the Pattern work limit.";break;
     }
     if(patternEnabled_.getButtonText()!=patternLabel)patternEnabled_.setButtonText(patternLabel);
     if(patternEnabled_.getTooltip()!=patternHelp){patternEnabled_.setTooltip(patternHelp);patternEnabled_.setDescription(patternHelp);}
@@ -1675,6 +2362,7 @@ void FxPanel::timerCallback()
     for (std::size_t i=0;i<4;++i) {
         const auto s=effects::unpack(static_cast<std::uint16_t>(fx>>(i*16)));
         effectsType_[i].setSelectedId(static_cast<int>(s.type)+1,juce::dontSendNotification);
+        refreshEffectSemantics(i);
     }
     if (sourcePanel_.isVisible()) sourcePanel_.refresh();
     if (programCurves_.isVisible()) programCurves_.refresh();

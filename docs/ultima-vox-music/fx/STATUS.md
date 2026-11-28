@@ -1,19 +1,76 @@
 # VOX FX development status — Draft PR #156
 
+**2026-11-27 product-completion checkpoint (`1625719fd5755fa1516d058b0b272a963aec33c9`):** the assigned Arena branch
+answers TL review comment
+[#7211163434](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7211163434)
+(accepted for Windows engineering preparation in TL comment
+[#7212562366](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7212562366)).
+The shipping Wavefold is again the original memoryless triangle fold with the
+±8 clamp (transfer bit-identical to `5c2f122` over four million samples —
+transfer-level only, not a whole-project bounce-identity claim); first-order
+ADAA Wavefold remains compiled only under `experimental::` and is never called
+by the shipping Chain, pending explicit approval. Amount-0 transparency is
+qualified to nominal ±1 input (over-range input still follows the legacy
+fold). The nonlinear alias suite was
+rebuilt to the review’s fixture list (explicit success gates, clamp-binding
+reference, measured lag, passband, transients, boundaries, Drive legacy
+compatibility metrics) and passes with `0 failure(s)` under ASan/UBSan;
+retained CTest/JUnit/provenance logs for the full 78/78 `suite` label are in
+`evidence/ctest-suite-8ebdec0-20261127.*`.
+FPRG v10 forward-compatibility and migration are covered by explicit tests
+across codec, portable and Generator suites. Host parameter IDs, the Wavefold
+type ID, frozen parser `1.11.0`, create-only export and the frozen
+`232 review-only / 0 approved` inventory are unchanged. See
+[WAVEFOLD_RESTORE_20261127.md](WAVEFOLD_RESTORE_20261127.md) and
+[PRODUCT_COMPLETION_20261127.md](PRODUCT_COMPLETION_20261127.md); the latter
+also records the task-5 **local implementation audit** (persistent A/B, all
+17 modulation destinations, browser facets and Save+drag export are already
+implemented — earlier “stale” notes overstate those gaps; this is **not** a
+claim that all product requirements are complete) and the Windows candidate
+preparation receipt (preflight extraction passed, **not dispatched**); one
+exact-source HAMUNAPTRA run is proposed in
+[WINDOWS_RUN_PROPOSAL_20261127.md](WINDOWS_RUN_PROPOSAL_20261127.md),
+pending explicit owner authorization. This
+supersedes the Wavefold/ADAA wording in the 2026-11-22 paragraph below.
+HOLD remains: no Windows CI dispatch, no PR #170 change, no merge, no release.
+
+**Current engineering checkpoint:** the Windows x64 FX-T18 measurement
+scenario is documented in
+[FX_T18_WINDOWS_MEASUREMENT_20261122.md](FX_T18_WINDOWS_MEASUREMENT_20261122.md).
+One owner-authorized typical-only diagnostic run completed at source
+`348bb2c`; its full audit passed integrity checks, but CTest remains blocking
+with `CPU_MEASUREMENT_INSUFFICIENT` because `GetThreadTimes` quantized at
+15,625 microseconds. No CPU qualification or release claim is made, and the
+Wavefold decision is unchanged. The separate method proposal is
+[FX_T18_CPU_METHOD_PROPOSAL_20261123.md](FX_T18_CPU_METHOD_PROPOSAL_20261123.md).
+The next owner-review artifact is the draft
+[FX-T18-WALL-GATE v1.2](FX_T18_WALL_GATE_V1_20261123.md); no full matrix is
+authorized until that contract is approved separately.
+
 This is a resume record, not release acceptance. Exact-head Windows suite,
 validator and binary SHA are pending; HOLD prohibits merge and release. See the
 [reconciliation and timing/export checkpoint](RECONCILIATION_20261119.md)
 for exact SHAs, local test evidence and the remaining release gates. The next
 [Program trajectory editor checkpoint](evidence/program-trajectories.md) is on the Arena development branch. See the [consolidated implementation handoff](IMPLEMENTATION_PASS_20261119.md) for the subsequent work.
 
-**Current handoff:** [Engineering delta](ENGINEERING_DELTA_20261119.md) is the live requirement map; [Windows engineering-gate plan](WINDOWS_ENGINEERING_GATE_20261119.md) is staged but unauthorized. [TL accepted the first checkpoint for development](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7033415367); staging adds Windows test fixtures/preflight and keyboard curve insertion. The TL has integrated that tranche for development. The TL accepted [measured post-event FX tails and bar-clock diagnostics](HOST_CLOCK_AND_TAIL_20261119.md) for development. The TL also accepted [per-layer Glitch slice authoring and production-rate synthetic regressions](GLITCH_SOURCE_20261119.md) for development; the follow-up adds a historical-project regression, malformed-v8 rollback checks, and [1.0 compatibility notes](USER_NOTES_1_0.md). The TL accepted [fractional moving free Delay](FREE_DELAY_MOTION_20261119.md) for development. The TL also integrated the [transition-boundary fix and Source keyboard scope](FREE_DELAY_BOUNDARY_20261119.md). Current staging adds [Granular Travel](GRANULAR_TRAVEL_20261119.md), [family depth](FAMILY_DEPTH_20261119.md), [antialiased Drive](NONLINEAR_ALIAS_20261119.md), [measured effect tails](EFFECT_TAILS_20261119.md), the [automation contract](AUTOMATION_CONTRACT_20261119.md) and the [TL order](INTEGRATED_CANDIDATE_PLAN_20261119.md). Intended-runner PowerShell 5.1 is a separate, mandatory qualification item, not on the development critical path. Draft/HOLD/NO MERGE. FX-T18, Windows and host proof of the implemented [owner-approved create-only Save](CREATE_ONLY_SAVE_20261119.md), private delivery and listening remain open. The 232-cue catalog is frozen, zero approved. The table and resume notes below are historical.
+**Current handoff:** [Engineering delta](ENGINEERING_DELTA_20261119.md) is the live requirement map; [Windows engineering-gate plan](WINDOWS_ENGINEERING_GATE_20261119.md) is staged but unauthorized. [TL accepted the first checkpoint for development](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7033415367); staging adds Windows test fixtures/preflight and keyboard curve insertion. The TL has integrated that tranche for development. The TL accepted [measured post-event FX tails and bar-clock diagnostics](HOST_CLOCK_AND_TAIL_20261119.md) for development. The TL also accepted [per-layer Glitch slice authoring and production-rate synthetic regressions](GLITCH_SOURCE_20261119.md) for development; the follow-up adds a historical-project regression, malformed-v8 rollback checks, and [1.0 compatibility notes](USER_NOTES_1_0.md). The TL accepted [fractional moving free Delay](FREE_DELAY_MOTION_20261119.md) for development. The TL also integrated the [transition-boundary fix and Source keyboard scope](FREE_DELAY_BOUNDARY_20261119.md). Current staging adds [Granular Travel](GRANULAR_TRAVEL_20261119.md), [family depth](FAMILY_DEPTH_20261119.md), [antialiased Drive](NONLINEAR_ALIAS_20261119.md), [measured effect tails](EFFECT_TAILS_20261119.md), the [automation contract](AUTOMATION_CONTRACT_20261119.md) and the [TL order](INTEGRATED_CANDIDATE_PLAN_20261119.md). Intended-runner PowerShell 5.1 is a separate, mandatory qualification item, not on the development critical path. Draft/HOLD/NO MERGE. FX-T18, Windows and host proof of the implemented [owner-approved create-only Save](CREATE_ONLY_SAVE_20261119.md), private delivery and listening remain open. The 232-cue catalog is frozen, zero approved. The current exact source/test/host reconciliation is [ENGINEERING_REQUIREMENT_MAP_20261122.md](ENGINEERING_REQUIREMENT_MAP_20261122.md); it records that PR #156 head `5c2f122c0203dde57bda7cd563340164601579b4` is not merged into the assigned Arena branch. The table and resume notes below are historical.
+
+**2026-11-22 product-completion tranche (`a6365ebf88414c4ff5813df396e5b12f2fc8e49b`):** the current Arena source adds three
+signed, family-named source controls for all twelve families, persisted as a
+forward-only FPRG v10 extension with older codecs unchanged; Generator/Mutate
+preserves them under the existing Character lock, and Source/Key exposes the
+actual controls with revision-guarded edits. The current four-slot FX engine
+retains all original IDs, adds explicit type-specific Amount semantics in the
+native UI, and applies first-order ADAA to Drive and Wavefold. Local standalone
+codec, source-family and FX/nonlinear regressions pass; this does not establish
+Windows, DAW, loaded RT, timing, listening, approval, RC, merge or release.
 
 | Milestone | Status |
 |---|---|
 | FX-01 | In progress: playable noise riser code, gain/duration parameters, v1→v2 state migration, interim bound UI and processor tests. Processor/UI tests await an executable JUCE suite build. |
 | FX-02 | Partial: One Shot, Gate, Continuous, Loop, Host Pattern Sequence and bar-aligned Transition have DSP/processor paths. A 4/4 Transition in bars ends on a host bar line; seconds stay free-running. MIDI ownership is FIFO by channel/key, including stolen, replaced and rejected presses. Preview and pattern triggers use isolated finite auditions for held modes. Linux engine tests cover the bar/BPM matrix, tempo changes, clock loss, click-managed cycle seams and voice expiry. Host seek/loop, tempo behavior and the native bindings still need executable plugin verification. |
-| FX-03 | Partial: Noise Riser, tonal/noise Downlifter, six-partial Shepard sweep, Impact, Whoosh, Laser, Squelch, Metallic, Texture, Formant, Glitch and procedural-source Granular Cloud are selectable. Program codec v4 migrates v1–v3 and persists 20 trajectories: amplitude/pitch/cutoff/panorama for each of four layers plus four global trajectories; pitch, cutoff, amplitude and panorama affect rendered samples while preserving centered/default legacy output. The JUCE editor exposes all four per-layer and all four Program-wide trajectories, with guarded undo/reset, multi-node editing, numeric entry and whole-curve clipboard. Deterministic curve/codec/audio tests pass in direct local C++ builds. A bounded WAV decoder/SHA-256 and a three-version immutable lease store connect to opt-in granular playback; FSMP external/pending references have explicit missing-content behavior but processor/host execution remains unverified. Native runtime qualification, spectral/filter controls, granular controls, algorithmic quality and comprehensive family tests remain. |
-| FX-04 | Partial: standalone typed 64-route matrix, LFO and seeded sample-and-hold primitives; four serial shared slots include bypass, lowpass, drive, wavefold, bitcrush, ring, gate, fixed-rate stereo phaser/flanger/chorus, feedback delay and bounded multitap reverb. Delay amount controls 50–500 ms and up to 75% feedback, with a 10 s per-slot silence cap and no callback allocation; tests verify repeat level, four-slot maximum tail and block invariance. Eight host-automatable slot wet/amount controls are stored in FXSL v2 (v1 migrates). Eight host macros, two fixed-rate LFOs and seeded S&H route to master gain or stereo balance through up to 64 routes. Other sources/destinations, tempo-sync controls, parameterized modulation rates, effect controls and quality policies remain; gain-compensated Drive removed full-scale samples from the reproduced four-slot stress case; spectral and listening qualification still remain. |
+| FX-03 | Partial: all twelve source families remain selectable. Program codec v4–v9 migrations remain byte-compatible, and the tranche adds signed type-specific `FamilyControls` as forward-only FPRG v10; Source/Key exposes family-named controls, dual filters, transpose, Glitch slices and Granular length/start/travel/reverse with revision guards. `FxSourceSoundTests` and `FxProgramCodecTests` exercise bounded family behavior and v10 migration. The JUCE editor exposes all four per-layer and all four Program-wide trajectories, with guarded undo/reset, multi-node editing, numeric entry and whole-curve clipboard. A bounded WAV decoder/SHA-256 and a three-version immutable lease store connect to opt-in granular playback; FSMP external/pending references have explicit missing-content behavior but processor/host execution remains unverified. Native runtime, DAW restore, sample relink and owner listening remain open. |
+| FX-04 | Partial: standalone typed 64-route matrix, LFO and seeded sample-and-hold primitives; four serial shared slots include bypass, lowpass, drive, wavefold, bitcrush, ring, gate, fixed-rate stereo phaser/flanger/chorus, feedback delay and bounded multitap reverb. Existing wet/amount host IDs remain; the native UI now names Amount by effect type (including distinct free Delay and Tempo Delay semantics). Drive and Wavefold use first-order ADAA with zero-amount transparency; tests cover nonlinear folded energy, four-slot tails and block invariance. Eight host macros, two fixed-rate LFOs and seeded S&H route to master gain or stereo balance through up to 64 routes. Loaded RT, broader modulation/quality permutations, host automation and listening remain open. |
 | FX-05 | Partial: deterministic standalone Generate/Mutate/A-B and a 48-program procedural seed corpus with locks and audible smoke tests. Generate/Mutate now publish to the plugin Program and have basic seed controls; seed, layer-lock masks, style-seed variant, active-layer count, intensity, energy and stereo are saved in FGEN v3 (v1/v2 migrate) and exposed in an interim settings panel; an interim selector loads the 48 uncurated procedural seed Programs without overwriting automation; session-only full-state A/B store/recall is exposed with explicit host-value recall; per-field locks are exposed for the nine current layer fields; remaining generator settings and locks for future content, persistent A/B and a curated preset browser remain; 1/4–1/32 straight/triplet 4/4 host-PPQ trigger playback, 12 seed patterns and canonical SMF export now have a processor controller and FPAT v3/FPEN project state; basic 1–4-bar length/grid/page and 16-step on/off plus note/velocity/probability/ratchet and swing editing exist; a save-dialog action exports the selected 4/4 trigger pattern to a .mid file using the latest observed host tempo (120 BPM when unavailable; export supports 10–1000 BPM); full workspace, musical curation, full settings, sample handling and host-sync validation remain; a configurable 44.1/48/96 kHz PCM24/float32 WAV save action snapshots Program and FX/host base values and renders on a cancellable editor-owned worker with bounded filter/modulation and serial delay tails, including feedback; bar auditions and one Sequence cycle export at fixed captured tempo; drag export and Windows dialog/worker validation remain. |
 | FX-06 | In progress: truthful interim Perform panel with block-snapshot active event/grain counters, saturated retirement-exhaustion drop counter and latched clip indicator; other workspaces and controls remain. |
 | FX-07 | Not complete: Windows exact-head suite/validator and binary hash, host, performance, safety, licensing and packaging qualification. |

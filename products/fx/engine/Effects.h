@@ -15,6 +15,47 @@ inline double tempoDelaySeconds(double tempo) noexcept {
     return 30.0/std::clamp(std::isfinite(tempo)?tempo:120.,30.,1000.);
 }
 enum class Type : std::uint8_t { bypass, lowpass, drive, wavefold, bitcrush, ring, gate, phaser, flanger, delay, chorus, reverb, tempoDelay, count };
+// The existing host Amount lane has a type-specific meaning. Keeping these
+// labels in the engine makes the same binding explicit in the native editor
+// without adding or renaming any host parameter IDs.
+inline constexpr const char* amountLabel(Type type) noexcept {
+    switch(type){
+        case Type::bypass:return "Amount (unused)";
+        case Type::lowpass:return "Cutoff";
+        case Type::drive:return "Saturation";
+        case Type::wavefold:return "Fold depth";
+        case Type::bitcrush:return "Bit reduction";
+        case Type::ring:return "Ring frequency";
+        case Type::gate:return "Gate rate";
+        case Type::phaser:return "Sweep depth";
+        case Type::flanger:return "Delay modulation";
+        case Type::delay:return "Time / feedback";
+        case Type::chorus:return "Modulation depth";
+        case Type::reverb:return "Room / decay";
+        case Type::tempoDelay:return "Feedback";
+        case Type::count:break;
+    }
+    return "Amount";
+}
+inline constexpr const char* amountHelp(Type type) noexcept {
+    switch(type){
+        case Type::lowpass:return "Type-specific cutoff from 60 Hz to 18 kHz";
+        case Type::drive:return "Antialiased saturation depth; amount 0 is transparent";
+        case Type::wavefold:return "Original triangle fold depth (memoryless); amount 0 is transparent for nominal ±1 input";
+        case Type::bitcrush:return "Quantization reduction, bounded to 1–15 bits";
+        case Type::ring:return "20 Hz to 2 kHz ring modulation carrier";
+        case Type::gate:return "1 Hz to 16 Hz synced gate";
+        case Type::phaser:return "Bounded four-stage stereo sweep";
+        case Type::flanger:return "Bounded fractional stereo delay motion";
+        case Type::delay:return "50–500 ms free delay and up to 75% feedback";
+        case Type::tempoDelay:return "Host eighth-note delay; amount controls feedback";
+        case Type::chorus:return "Bounded 9–23 ms stereo modulation";
+        case Type::reverb:return "Bounded room feedback and tail";
+        case Type::bypass:return "No effect processing";
+        case Type::count:break;
+    }
+    return "Type-specific effect control";
+}
 struct Settings {
     Type type=Type::bypass;
     float wet=1, amount=.5f;
@@ -95,6 +136,47 @@ private:
     double lastIdeal_=0,lastPosition_=0,from_=0,to_=0;
 };
 } // namespace detail
+// SHIPPING Wavefold transfer: the original memoryless triangle fold with the
+// +/-8 input clamp. Restored verbatim as the default path so sound, phase and
+// transient response match #156 5c2f122 (TL review 7211163434). No history,
+// no zero-amount bypass branch and no latency: each sample is a pure function
+// of itself. Do not replace without explicit owner approval and listening.
+inline double wavefoldTransfer(double value,double gain) noexcept {
+    constexpr double pi=3.14159265358979323846;
+    const auto scaled=std::clamp(value*gain,-8.0,8.0);
+    return (2.0/pi)*std::asin(std::sin(pi*scaled*.5));
+}
+// EXPERIMENTAL — not the shipping path. First-order antiderivative antialiasing
+// over the same triangle-fold transfer, retained as a separately versioned
+// candidate pending explicit owner approval and listening (TL review
+// 7211163434). Chain never calls this; tests may measure it directly so the
+// experimental curve stays executable without changing shipping sound.
+namespace experimental {
+// Antiderivative of the unit-periodized triangle fold in the gain-scaled
+// domain. The caller clamps to the legacy +/-8 input boundary. Its period
+// integral is zero, so reducing to [0,4) preserves the exact first-order
+// ADAA difference across fold turns without allocation.
+inline double wavefoldIntegral(double value) noexcept {
+    double phase=std::fmod(value,4.0);
+    if(phase<0)phase+=4.0;
+    if(phase<=1.0)return .5*phase*phase;
+    if(phase<=3.0)return 2.0*phase-.5*phase*phase-1.0;
+    return .5*phase*phase-4.0*phase+8.0;
+}
+// Stateful helper: `previous` must hold the previous input sample of the same
+// channel; pass 0 after a reset or type change.
+inline double wavefoldAdaa(double value,double& previous,double gain) noexcept {
+    const double delta=value-previous;
+    const auto integral=[gain](double input){
+        return wavefoldIntegral(std::clamp(input*gain,-8.0,8.0));
+    };
+    const double result=std::abs(delta)>1.0e-9
+        ?(integral(value)-integral(previous))/(gain*delta)
+        :wavefoldTransfer(value,gain);
+    previous=value;
+    return result;
+}
+} // namespace experimental
 class Chain {
     struct State {
         Type type=Type::bypass;
@@ -138,11 +220,13 @@ public:
     bool set(std::size_t slot,Settings settings) noexcept {
         if(slot>=slots_.size()||!settings.valid())return false;
         // A silent input feeds an identically silent input into a new nonlinear
-        // stage, so any stale ADAA history is inaudible. Starting from zero
-        // keeps a freshly selected Drive slot deterministic.
-        if(slots_[slot].desired.type!=settings.type)
+        // stage, so any stale Drive ADAA history is inaudible. Starting from
+        // zero keeps a freshly selected Drive slot deterministic. The shipping
+        // Wavefold path is memoryless and holds no history.
+        if(slots_[slot].desired.type!=settings.type) {
             slots_[slot].current.drivePreviousL=slots_[slot].current.drivePreviousR=
                 slots_[slot].old.drivePreviousL=slots_[slot].old.drivePreviousR=0;
+        }
         slots_[slot].desired=settings;return true;
     }
     void process(float* left,float* right,std::size_t count,const float* modulation=nullptr) noexcept {
@@ -229,9 +313,14 @@ private:
             l=tick(l,state.drivePreviousL);r=tick(r,state.drivePreviousR);break;
         }
         case Type::wavefold: {
+            // SHIPPING PATH: the original memoryless triangle fold with the
+            // +/-8 input clamp, restored as the default transfer (TL review
+            // 7211163434: sound, phase/transient response and legacy project
+            // bounces must match #156 5c2f122 exactly). The first-order ADAA
+            // variant lives in experimental::wavefoldAdaa, unwired from the
+            // Chain pending explicit owner approval and listening.
             const double gain=1+7*amount;
-            auto fold=[gain](double x){x=std::clamp(x*gain,-8.0,8.0);return 2.0/std::acos(-1.0)*std::asin(std::sin(std::acos(-1.0)*x*.5));};
-            l=fold(l);r=fold(r);break;
+            l=wavefoldTransfer(l,gain);r=wavefoldTransfer(r,gain);break;
         }
         case Type::bitcrush: {const double levels=std::round(32768.0*std::pow(1.0/8192.0,amount));
             l=std::round(std::clamp(l,-1.0,1.0)*levels)/levels;

@@ -103,6 +103,16 @@ public:
         if(!programcodec::encode(next,encoded))return false;
         commit(next,encoded,desiredEffects_,desiredPattern_,desiredMacros_,desiredGenerator_);return true;
     }
+    // Revision-free tonality edit (PERFORM pitch-key select): same commit
+    // path, no drag-guard token required.
+    bool editTonality(source::Tonality tonality) {
+        if(!tonality.valid())return false;
+        const std::lock_guard<std::mutex> lock(mutex_);
+        auto next=desired_;next.tonality=tonality;
+        std::vector<std::byte> encoded;
+        if(!programcodec::encode(next,encoded))return false;
+        commit(next,encoded,desiredEffects_,desiredPattern_,desiredMacros_,desiredGenerator_);return true;
+    }
     std::uint64_t programRevision() const noexcept { return programRevision_.load(std::memory_order_acquire); }
     struct VersionedProgram { NoiseProgram program;std::uint64_t revision,publication; };
     VersionedProgram versionedProgram() const {

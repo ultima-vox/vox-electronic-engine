@@ -1,0 +1,164 @@
+Test project /home/user/vox-electronic-engine/build-linux
+      Start  1: vox_preset_tests
+ 1/78 Test  #1: vox_preset_tests .........................   Passed    0.00 sec
+      Start  2: suite_identity_tests
+ 2/78 Test  #2: suite_identity_tests .....................   Passed    0.11 sec
+      Start  3: suite_identity_doc
+ 3/78 Test  #3: suite_identity_doc .......................   Passed    0.05 sec
+      Start  4: suite_provenance
+ 4/78 Test  #4: suite_provenance .........................   Passed    0.01 sec
+      Start  5: suite_effects_tests
+ 5/78 Test  #5: suite_effects_tests ......................   Passed    0.01 sec
+      Start  6: suite_effects_tail_policy_tests
+ 6/78 Test  #6: suite_effects_tail_policy_tests ..........   Passed    0.11 sec
+      Start  7: suite_allocation_probe_tests
+ 7/78 Test  #7: suite_allocation_probe_tests .............   Passed    0.10 sec
+      Start  8: suite_primitives_tests
+ 8/78 Test  #8: suite_primitives_tests ...................   Passed    0.13 sec
+      Start  9: suite_effects_golden_tests
+ 9/78 Test  #9: suite_effects_golden_tests ...............   Passed    1.41 sec
+      Start 10: suite_drums_legacy_golden_tests
+10/78 Test #10: suite_drums_legacy_golden_tests ..........   Passed    7.18 sec
+      Start 11: suite_drums_product_tests
+11/78 Test #11: suite_drums_product_tests ................   Passed   17.55 sec
+      Start 12: suite_drums_sample_tests
+12/78 Test #12: suite_drums_sample_tests .................   Passed    4.97 sec
+      Start 13: suite_drums_kit_engine_tests
+13/78 Test #13: suite_drums_kit_engine_tests .............   Passed    7.09 sec
+      Start 14: suite_drums_kit_parity_tests
+14/78 Test #14: suite_drums_kit_parity_tests .............   Passed   23.72 sec
+      Start 15: suite_drums_parity_tests
+15/78 Test #15: suite_drums_parity_tests .................   Passed   36.16 sec
+      Start 16: suite_boundaries
+16/78 Test #16: suite_boundaries .........................   Passed    0.19 sec
+      Start 17: suite_shell_tests_syn
+17/78 Test #17: suite_shell_tests_syn ....................   Passed    1.16 sec
+      Start 18: suite_shell_tests_drm
+18/78 Test #18: suite_shell_tests_drm ....................   Passed   26.69 sec
+      Start 19: suite_shell_tests_fx
+19/78 Test #19: suite_shell_tests_fx .....................   Passed    1.74 sec
+      Start 20: suite_vst3_host_tests
+20/78 Test #20: suite_vst3_host_tests ....................   Passed    0.47 sec
+      Start 21: suite_moduleinfo
+21/78 Test #21: suite_moduleinfo .........................   Passed    0.01 sec
+      Start 22: suite_verify_juce_strict-pinned
+22/78 Test #22: suite_verify_juce_strict-pinned ..........   Passed    0.02 sec
+      Start 23: suite_verify_juce_strict-wrong-commit
+23/78 Test #23: suite_verify_juce_strict-wrong-commit ....   Passed    0.02 sec
+      Start 24: suite_verify_juce_strict-no-metadata
+24/78 Test #24: suite_verify_juce_strict-no-metadata .....   Passed    0.01 sec
+      Start 25: suite_verify_juce_relaxed-no-metadata
+25/78 Test #25: suite_verify_juce_relaxed-no-metadata ....   Passed    0.01 sec
+      Start 26: suite_verify_juce_relaxed-wrong-commit
+26/78 Test #26: suite_verify_juce_relaxed-wrong-commit ...   Passed    0.02 sec
+      Start 27: suite_fx_noise_riser_tests
+27/78 Test #27: suite_fx_noise_riser_tests ...............   Passed    2.44 sec
+      Start 28: suite_fx_automation_tests
+28/78 Test #28: suite_fx_automation_tests ................   Passed    0.04 sec
+      Start 29: suite_fx_processor_tests
+29/78 Test #29: suite_fx_processor_tests .................   Passed    3.87 sec
+      Start 30: suite_fx_timeline_tests
+30/78 Test #30: suite_fx_timeline_tests ..................   Passed    0.21 sec
+      Start 31: suite_fx_bar_event_tests
+31/78 Test #31: suite_fx_bar_event_tests .................   Passed    0.95 sec
+      Start 32: suite_fx_layer_tests
+32/78 Test #32: suite_fx_layer_tests .....................   Passed    0.01 sec
+      Start 33: suite_fx_program_bridge_tests
+33/78 Test #33: suite_fx_program_bridge_tests ............   Passed    0.04 sec
+      Start 34: suite_fx_downlifter_tests
+34/78 Test #34: suite_fx_downlifter_tests ................   Passed    0.14 sec
+      Start 35: suite_fx_shepard_tests
+35/78 Test #35: suite_fx_shepard_tests ...................   Passed    0.20 sec
+      Start 36: suite_fx_impact_tests
+36/78 Test #36: suite_fx_impact_tests ....................   Passed    0.30 sec
+      Start 37: suite_fx_whoosh_tests
+37/78 Test #37: suite_fx_whoosh_tests ....................   Passed    0.15 sec
+      Start 38: suite_fx_laser_tests
+38/78 Test #38: suite_fx_laser_tests .....................   Passed    0.08 sec
+      Start 39: suite_fx_squelch_tests
+39/78 Test #39: suite_fx_squelch_tests ...................   Passed    0.53 sec
+      Start 40: suite_fx_metallic_tests
+40/78 Test #40: suite_fx_metallic_tests ..................   Passed    0.92 sec
+      Start 41: suite_fx_texture_tests
+41/78 Test #41: suite_fx_texture_tests ...................   Passed    0.33 sec
+      Start 42: suite_fx_formant_tests
+42/78 Test #42: suite_fx_formant_tests ...................   Passed    0.69 sec
+      Start 43: suite_fx_effect_tail_tests
+43/78 Test #43: suite_fx_effect_tail_tests ...............   Passed    2.34 sec
+      Start 44: suite_fx_nonlinear_alias_tests
+44/78 Test #44: suite_fx_nonlinear_alias_tests ...........   Passed    0.38 sec
+      Start 45: suite_fx_family_differentiation_tests
+45/78 Test #45: suite_fx_family_differentiation_tests ....   Passed    1.21 sec
+      Start 46: suite_fx_program_codec_tests
+46/78 Test #46: suite_fx_program_codec_tests .............   Passed    0.03 sec
+      Start 47: suite_fx_playback_mode_tests
+47/78 Test #47: suite_fx_playback_mode_tests .............   Passed    0.07 sec
+      Start 48: suite_fx_curve_trajectory_tests
+48/78 Test #48: suite_fx_curve_trajectory_tests ..........   Passed    0.05 sec
+      Start 49: suite_fx_program_store_tests
+49/78 Test #49: suite_fx_program_store_tests .............   Passed    0.41 sec
+      Start 50: suite_fx_callback_benchmark
+50/78 Test #50: suite_fx_callback_benchmark ..............   Passed    2.34 sec
+      Start 51: suite_fx_modulation_tests
+51/78 Test #51: suite_fx_modulation_tests ................   Passed    0.00 sec
+      Start 52: suite_fx_glitch_tests
+52/78 Test #52: suite_fx_glitch_tests ....................   Passed    0.09 sec
+      Start 53: suite_fx_granular_tests
+53/78 Test #53: suite_fx_granular_tests ..................   Passed    0.45 sec
+      Start 54: suite_fx_generator_tests
+54/78 Test #54: suite_fx_generator_tests .................   Passed    0.24 sec
+      Start 55: suite_fx_pattern_tests
+55/78 Test #55: suite_fx_pattern_tests ...................   Passed    0.01 sec
+      Start 56: suite_fx_offline_render_tests
+56/78 Test #56: suite_fx_offline_render_tests ............   Passed    0.19 sec
+      Start 57: suite_fx_effects_tests
+57/78 Test #57: suite_fx_effects_tests ...................   Passed    0.45 sec
+      Start 58: suite_fx_effects_benchmark
+58/78 Test #58: suite_fx_effects_benchmark ...............   Passed    3.32 sec
+      Start 59: suite_fx_pattern_codec_tests
+59/78 Test #59: suite_fx_pattern_codec_tests .............   Passed    0.00 sec
+      Start 60: suite_fx_pattern_playback_tests
+60/78 Test #60: suite_fx_pattern_playback_tests ..........   Passed    0.01 sec
+      Start 61: suite_fx_pattern_grid_tests
+61/78 Test #61: suite_fx_pattern_grid_tests ..............   Passed    0.01 sec
+      Start 62: suite_fx_pattern_swing_tests
+62/78 Test #62: suite_fx_pattern_swing_tests .............   Passed    0.00 sec
+      Start 63: suite_fx_macro_routing_tests
+63/78 Test #63: suite_fx_macro_routing_tests .............   Passed    0.00 sec
+      Start 64: suite_fx_generator_state_tests
+64/78 Test #64: suite_fx_generator_state_tests ...........   Passed    0.00 sec
+      Start 65: suite_fx_file_export_tests
+65/78 Test #65: suite_fx_file_export_tests ...............   Passed    0.05 sec
+      Start 66: suite_fx_sample_store_tests
+66/78 Test #66: suite_fx_sample_store_tests ..............   Passed    0.08 sec
+      Start 67: suite_fx_sample_decode_tests
+67/78 Test #67: suite_fx_sample_decode_tests .............   Passed    0.02 sec
+      Start 68: suite_fx_sample_granular_tests
+68/78 Test #68: suite_fx_sample_granular_tests ...........   Passed    0.17 sec
+      Start 69: suite_fx_sample_reference_tests
+69/78 Test #69: suite_fx_sample_reference_tests ..........   Passed    0.00 sec
+      Start 70: suite_fx_sample_controller_tests
+70/78 Test #70: suite_fx_sample_controller_tests .........   Passed    0.58 sec
+      Start 71: suite_fx_transport_tests
+71/78 Test #71: suite_fx_transport_tests .................   Passed    0.00 sec
+      Start 72: suite_fx_pattern_benchmark
+72/78 Test #72: suite_fx_pattern_benchmark ...............   Passed    1.19 sec
+      Start 73: suite_fx_factory_candidates_tests
+73/78 Test #73: suite_fx_factory_candidates_tests ........   Passed   53.80 sec
+      Start 74: suite_fx_source_sound_tests
+74/78 Test #74: suite_fx_source_sound_tests ..............   Passed    0.15 sec
+      Start 75: suite_fx_portable_preset_tests
+75/78 Test #75: suite_fx_portable_preset_tests ...........   Passed    0.05 sec
+      Start 76: suite_fx_sound_graph_tests
+76/78 Test #76: suite_fx_sound_graph_tests ...............   Passed    0.86 sec
+      Start 77: suite_fx_preset_library_tests
+77/78 Test #77: suite_fx_preset_library_tests ............   Passed    0.02 sec
+      Start 78: suite_fx_runtime_stress_tests
+78/78 Test #78: suite_fx_runtime_stress_tests ............   Passed    4.98 sec
+
+100% tests passed out of 78
+
+Label Time Summary:
+suite    = 213.35 sec*proc (78 tests)
+
+Total Test time (real) = 213.37 sec

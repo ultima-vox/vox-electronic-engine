@@ -1,5 +1,81 @@
 # VOX FX release evidence ledger
 
+## 2026-11-27 — product-completion checkpoint `1625719fd5755fa1516d058b0b272a963aec33c9`, HOLD retained
+
+- TL review comment
+  [#7211163434](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7211163434)
+  P1 items answered: shipping Wavefold restored to the original memoryless
+  triangle fold (bit-identical to `5c2f122` over 4 M samples), ADAA Wavefold
+  kept experimental and unwired, nonlinear regression rewritten with explicit
+  success gates and the clamp-inclusive reference, FPRG v10 migration covered
+  by tests. See [WAVEFOLD_RESTORE_20261127.md](WAVEFOLD_RESTORE_20261127.md)
+  and [PRODUCT_COMPLETION_20261127.md](PRODUCT_COMPLETION_20261127.md).
+- Invariants held: host parameter IDs (`parameters.csv`), Wavefold type ID,
+  frozen diagnostic parser `1.11.0`, create-only WAV/MIDI export policy,
+  frozen `232 review-only / 0 approved` inventory with the `600` target.
+- Task-5 audit: persistent A/B, 17 modulation destinations, browser facets
+  and Save+drag export confirmed already implemented (earlier status notes
+  overstated those gaps); duration lock is intentionally non-serializable in
+  FGEN v4 (tested) and has no UI, so no schema change was made.
+- Windows x64 engineering candidate **prepared, not dispatched**: preflight
+  extraction at this SHA passed (16 PowerShell blocks extracted, not
+  executed; bundle names match `SuiteIdentity.cmake`). Exact-HEAD Windows
+  suite, Steinberg validator and artifact SHA remain open behind CI
+  authorization. This is not Windows, DAW, listening, RC, merge or release
+  evidence.
+- TL comment
+  [#7212562366](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7212562366)
+  accepted `8ebdec0` for Windows engineering preparation; nonblocking
+  corrections applied (file list, FX-T09/FX-T16/FX-T17/FX-T20 numbering,
+  SHA-attributed test evidence with retained CTest/JUnit/provenance logs,
+  amount-0 help qualified to nominal ±1, no whole-bounce-identity claim,
+  local-audit framing). One exact-source HAMUNAPTRA run proposed in
+  [WINDOWS_RUN_PROPOSAL_20261127.md](WINDOWS_RUN_PROPOSAL_20261127.md) —
+  **not dispatched, owner authorization required**.
+- **Authorized Windows engineering run — FAIL, focused fix** (TL comment
+  [#7213197538](https://github.com/ultima-vox/vox-electronic-engine/pull/156#issuecomment-7213197538)):
+  HAMUNAPTRA job 140374750304 /
+  [run 45959826386](https://github.com/ultima-vox/vox-electronic-engine/actions/runs/45959826386)
+  at `8ebdec0` passed host/source, PowerShell Desktop 5.1.26100.9711
+  preflight (19 scripts + inventory fixtures), dependency/validator
+  preparation and CMake configure, then **build failed MSVC C2397** at
+  `FxNonlinearAliasTests.cpp:531,534` — `std::nan("")` (double) narrowed
+  into `Settings` float members; CTest and validator skipped; the uploaded
+  510-byte archive is environment-only, **not VST3**. Fix: those two inputs
+  only, now `std::numeric_limits<float>::quiet_NaN()` (double NaN retained
+  for `prepare(double)`; negative checks unchanged). Repo-wide list-init
+  audit found **no other** C2397-class sites (all remaining NaN/double uses
+  are double-parameter calls; float-aggregate brace inits use float
+  variables or representable constants). Focused regression at the corrected
+  SHA: FxNonlinearAliasTests (strict `-Werror`, plus ASan/UBSan),
+  FxEffectsTests, FxProgramCodecTests, FxGeneratorTests,
+  FxPortablePresetTests — **0 failures each**; GCC cannot diagnose this
+  narrowing even with `-Wfloat-conversion -Werror` (verified), which is why
+  Linux stayed green. Windows evidence does not transfer to the corrected
+  SHA; **no re-dispatch until the owner authorizes the corrected SHA**.
+  HOLD/no merge/no release unchanged; no ETW work.
+
+## 2026-11-22 — product-completion tranche `a6365ebf88414c4ff5813df396e5b12f2fc8e49b`, HOLD retained
+
+- The assigned Arena branch remains separate from exact PR #156 head
+  `5c2f122c0203dde57bda7cd563340164601579b4`; no merge or integrated-candidate
+  claim is made. See [exact requirement map](ENGINEERING_REQUIREMENT_MAP_20261122.md).
+- Source-family controls now have a real `FamilyControls` binding in
+  `NoiseRiser`, `SourcePanel`, `Generator` lock preservation, and forward-only
+  Program codec v10 migration. Existing codecs, Wavefold type ID, and host
+  parameter IDs are preserved.
+- Drive and Wavefold now use bounded first-order ADAA; local nonlinear/effects
+  regressions pass. This is not Windows, DAW, loaded-RT, listening, production
+  receipt, RC, merge, or release evidence. See
+  [NONLINEAR_ALIAS_20261122.md](NONLINEAR_ALIAS_20261122.md).
+- The accepted FX-T18 parser package is frozen at `1.11.0` and remains
+  diagnostic-only. Counters remain observed `5/4/9`, reconciled `5/3/8`, one
+  unmatched noncontrolled stop, zero unmatched controlled joins; no production
+  timing qualification is granted.
+- Review content remains exactly `232 review-only / 0 approved`; the `600`
+  approved-program target is unchanged. No raw audio transfer or catalog
+  expansion occurred.
+
 ## 2026-11-19 — current engineering evidence, HOLD retained
 
 - [Granular Travel](GRANULAR_TRAVEL_20261119.md): per-layer scan of grain starts, distinct from pitch and reverse, with opt-in FPRG v9 state requiring review. Legacy v6–v8 encodings, host IDs, Save, and offered drag contracts are unchanged. See the [integrated candidate plan](INTEGRATED_CANDIDATE_PLAN_20261119.md).

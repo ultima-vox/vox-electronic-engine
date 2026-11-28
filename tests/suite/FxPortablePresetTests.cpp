@@ -9,6 +9,8 @@ int main(){
     portable::Sound a,b;
     a.state.program.layers[0].transpose=11;
     a.state.program.layers[1].grains={95,.8f,true};
+    a.state.program.layers[0].familyControls={.55f,-.45f,.65f};
+    a.state.program.layers[2].grains.travel=-.6f;
     a.state.macros.event={{.3f,.2f,.4f,.5f,.3f,.7f,.8f,1.f},true,.03f,.27f,.43f,.511f};
     a.state.pattern.steps[0]={true,53,97,71,4};
     a.state.effects=effects::pack({effects::Type::reverb,.22f,.71f});
@@ -16,6 +18,16 @@ int main(){
     std::vector<std::byte> bytes,roundtrip;
     check(portable::encode(a,bytes)&&portable::decode(bytes,b)&&portable::encode(b,roundtrip)&&bytes==roundtrip,"deterministic portable round trip");
     check(b.state.program.layers[0].transpose==11&&b.state.program.layers[1].grains==a.state.program.layers[1].grains&&b.state.pattern.steps[0].ratchets==4&&b.state.macros==a.state.macros,"portable authored sections restored");
+    // FPRG10 travels nested inside the portable document and roundtrips.
+    check(b.state.program.layers[0].familyControls==a.state.program.layers[0].familyControls&&
+          b.state.program.layers[2].grains.travel==-.6f,
+          "portable preset carries FPRG10 family controls and travel");
+    {
+        auto document=preset::decode(bytes,portable::product,portable::version);
+        const auto* fprg=document.ok()?document.document.find(preset::makeTag("FPRG")):nullptr;
+        check(fprg&&!fprg->data.empty()&&fprg->data.front()==std::byte{10},
+              "nested FPRG section inside the portable document is v10");
+    }
     check(effects::unpack(static_cast<std::uint16_t>(b.state.effects)).type==effects::Type::reverb&&bytes.size()>0,"effect topology retained without automated values");
     for(std::size_t n=0;n<bytes.size();++n)check(!portable::decode(std::span(bytes).first(n),b),"reject every truncation");
     if(!bytes.empty())bytes.back()^=std::byte{1};

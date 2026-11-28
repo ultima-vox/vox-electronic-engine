@@ -112,7 +112,7 @@ void VoxSectionHeader::paint (juce::Graphics& g)
             const auto d = juce::jmin (circle.getWidth(), circle.getHeight());
             circle = circle.withSizeKeepingCentre (d, d).reduced (2.0f);
 
-            g.setColour (powerOn ? tokens::colour::accent : tokens::colour::border);
+            g.setColour (powerOn ? tokens::colour::themeAccent : tokens::colour::border);
             g.drawEllipse (circle, 1.5f);
 
             if (powerOn)

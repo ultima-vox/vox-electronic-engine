@@ -13,12 +13,20 @@ int main(){
     check(generate(s,Result{},locks,a)&&generate(s,Result{},locks,b),"deterministic generation");
     std::vector<std::byte> x,y;programcodec::encode(a.program,x);programcodec::encode(b.program,y);check(x==y&&a.seconds==b.seconds,"identical seeds");
     locks.layers[0]=all;locks.layers[1]=gain|pan;locks.duration=true;
+    a.program.layers[0].familyControls={.4f,-.3f,.6f};
     Result changed;s.seed=987;check(generate(s,a,locks,changed),"locked generation");
     check(changed.program.layers[0].family==a.program.layers[0].family && changed.program.layers[0].gain==a.program.layers[0].gain &&
+          changed.program.layers[0].familyControls==a.program.layers[0].familyControls &&
           changed.program.layers[1].gain==a.program.layers[1].gain && changed.program.layers[1].pan==a.program.layers[1].pan && changed.seconds==a.seconds,"locked values preserved");
     Result m1,m2;check(mutate(a,locks,22,m1)&&mutate(a,locks,22,m2),"mutation");
     programcodec::encode(m1.program,x);programcodec::encode(m2.program,y);check(x==y,"mutation deterministic");
     check(m1.program.layers[0].gain==a.program.layers[0].gain && m1.program.layers[1].pan==a.program.layers[1].pan,"mutation respects locks");
+    // familyControls are user-authored, not generator-owned: mutation must
+    // keep them even when the Character lock is open on an unlocked layer.
+    Locks openLocks;
+    Result m3;check(mutate(a,openLocks,22,m3)&&
+          m3.program.layers[0].familyControls==a.program.layers[0].familyControls,
+          "mutation preserves authored family controls without a lock");
     Result va,vb;check(variation(s,a,locks,false,va)&&variation(s,a,locks,true,vb),"A/B generation");
     programcodec::encode(va.program,x);programcodec::encode(vb.program,y);check(x!=y,"A/B distinct");
     std::set<std::vector<std::byte>> programs;

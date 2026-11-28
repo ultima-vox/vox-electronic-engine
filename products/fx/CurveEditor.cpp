@@ -9,6 +9,11 @@
 #include <numeric>
 #include <sstream>
 
+// String literals in this project are UTF-8; JUCE's String(const char*)
+// treats them as ASCII, so any literal outside 7-bit ASCII goes through
+// juce::String::fromUTF8 (see VOX design typography).
+inline juce::String u8 (const char* text) { return juce::String::fromUTF8 (text); }
+
 namespace vox::fx {
 namespace {
 bool sameCurve(const timeline::Curve& a,const timeline::Curve& b) noexcept {
@@ -281,7 +286,7 @@ void CurveEditor::enterNodeValues() {
             auto next=original;auto& n=next.nodes[static_cast<std::size_t>(index)];
             if(!parse(window->getTextEditorContents("value"),n.value) ||
                (interior&&!parse(window->getTextEditorContents("time"),n.time)) || !next.valid()) {
-                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Invalid node", "Use 0–100%; time must stay between neighbouring nodes.");return;
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Invalid node", u8("Use 0–100%; time must stay between neighbouring nodes."));return;
             }
             (void)safe->applyEdit(next);
         }),true);

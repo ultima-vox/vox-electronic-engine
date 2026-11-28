@@ -4,27 +4,72 @@
 
 namespace vox::ui::tokens {
 
+// VOX MUSIC design language — Gate-1 accepted palette (owner review 2026-11-18,
+// comment 6980638479) as extracted from the frozen reference
+// apps/vox-music-prototype/src/design-system/system.css at PR #160
+// e420d2c0fa95cebf4ec0ff0c4b359d9d35c28d93 (::root dark theme).
 namespace colour {
-inline const auto background = juce::Colour::fromString ("FF06121D");
-inline const auto panel = juce::Colour::fromString ("FF0B1925");
-inline const auto panelRaised = juce::Colour::fromString ("FF102230");
-inline const auto control = juce::Colour::fromString ("FF0A1722");
-inline const auto graph = juce::Colour::fromString ("FF051019");
+inline const auto background = juce::Colour (0xff101218);
+inline const auto panel = juce::Colour (0xff181b22);
+inline const auto panelRaised = juce::Colour (0xff22262f);
+inline const auto control = juce::Colour (0xff11141a); // well
+inline const auto wellGroup = juce::Colour (0xff151820); // grouped dial wells (fx.css)
+inline const auto graph = juce::Colour (0xff11141a);
 
-inline const auto border = juce::Colour::fromString ("FF1D3B50");
-inline const auto borderSubtle = juce::Colour::fromString ("FF122C3D");
+inline const auto border = juce::Colour (0xff313640);
+inline const auto borderSubtle = juce::Colour (0xff292e37);
 
-inline const auto accent = juce::Colour::fromString ("FF00DDF5");
-inline const auto accentHover = juce::Colour::fromString ("FF42EEFF");
-inline const auto accentDim = juce::Colour::fromString ("FF087B92");
+inline const auto accent = juce::Colour (0xfff3bd72);        // default product accent
+inline const auto accentHover = juce::Colour (0xfff8d194);
+inline const auto accentDim = juce::Colour (0xff7a5f36);
 
-inline const auto text = juce::Colour::fromString ("FFE9F3FA");
-inline const auto textSecondary = juce::Colour::fromString ("FF9AB2C5");
-inline const auto textMuted = juce::Colour::fromString ("FF587487");
+inline const auto text = juce::Colour (0xffeef0f3);
+inline const auto textSecondary = juce::Colour (0xffadb4c0);
+inline const auto textMuted = juce::Colour (0xff929aa9);
 
-inline const auto danger = juce::Colour::fromString ("FFE4425D");
-inline const auto success = juce::Colour::fromString ("FF32D296");
-inline const auto warning = juce::Colour::fromString ("FFE3B341");
+inline const auto danger = juce::Colour (0xfffb9995);
+inline const auto success = juce::Colour (0xff89d4aa);
+inline const auto warning = juce::Colour (0xfff3bd72);
+
+// Product accents ([data-theme] variants of the same language).
+namespace fx {
+inline const auto accent = juce::Colour (0xff7ce2d0);   // VOX FX
+inline const auto accentLine = juce::Colour (0xff517e7c);
+inline const auto onAccent = juce::Colour (0xff112627);
+inline const auto modulation = juce::Colour (0xffb3a7f4);
+} // namespace fx
+
+// Product-selected accent (the [data-theme] equivalent): the hosting plugin
+// selects its product variant once at editor construction and every shared
+// component paints through these references. Defaults to the product-neutral
+// amber.
+//
+// Theme isolation (TL 7243048342): this trio is the ONLY mutable state in the
+// token set. The mutable state is compiled with hidden visibility so each
+// product module keeps a private copy — co-hosting VOX FX next to VOX Drums
+// or VOX Trance Synthesis can never interpose or mutate another module's
+// theme (each product links the vox_ui archive privately and each product
+// editor selects its own variant before painting). Components read the theme
+// only at paint time; product editors select before children are constructed.
+#if defined(__GNUC__) || defined(__clang__)
+#define VOX_HIDDEN [[gnu::visibility ("hidden")]]
+#else
+#define VOX_HIDDEN
+#endif
+VOX_HIDDEN inline juce::Colour themeAccent = accent;
+VOX_HIDDEN inline juce::Colour themeAccentHover = accentHover;
+VOX_HIDDEN inline juce::Colour themeAccentDim = accentDim;
+#undef VOX_HIDDEN
+
+inline void selectFxTheme() noexcept {
+    themeAccent = fx::accent;
+    themeAccentHover = fx::accent; // mint family has no separate hover token
+    themeAccentDim = fx::accentLine;
+}
+namespace synth {
+inline const auto accent = juce::Colour (0xffc3a9f7);
+inline const auto onAccent = juce::Colour (0xff21192c);
+} // namespace synth
 } // namespace colour
 
 namespace spacing {
@@ -40,7 +85,8 @@ inline constexpr int xxxl = 32;
 namespace radius {
 inline constexpr float small = 4.0f;
 inline constexpr float medium = 6.0f;
-inline constexpr float large = 8.0f;
+inline constexpr float large = 9.0f;
+inline constexpr float panel = 10.0f;
 } // namespace radius
 
 namespace size {
@@ -53,6 +99,7 @@ inline constexpr int instrumentSlotMinHeight = 54;
 inline constexpr int instrumentSlotMaxHeight = 58;
 inline constexpr int referenceWidth = 1440;
 inline constexpr int referenceHeight = 1080;
+inline constexpr int moduleHeaderHeight = 42;
 } // namespace size
 
 } // namespace vox::ui::tokens

@@ -80,6 +80,46 @@ public:
         previewBus_.stop();auditionRequest_.store(AuditionRequest::stop,std::memory_order_release);
     }
     void panic() noexcept { previewBus_.stop();panicPending_.store (true, std::memory_order_release); }
+    // UI performance keyboard: bounded SPSC note queue (UI thread produces,
+    // audio thread consumes) plus a fail-closed release latch. UI voices use
+    // TriggerSource::ui on the engine's independent channel-0 ticket domain
+    // — never a host MIDI channel — and are never written back into the host
+    // MidiBuffer (no synthetic host MIDI echo). When the ring is full a
+    // note-off is coalesced into the release latch instead of being dropped,
+    // so a gate/continuous note can never be stranded by overflow; note-ons
+    // fail closed (counted). The path allocates nothing and takes no locks.
+    struct UiNoteEvent { std::uint8_t kind; // 1 = note on, 0 = note off
+                         std::uint8_t note = 0, velocity = 0;
+                         std::uint32_t generation = 0; };
+    bool pushUiNote(UiNoteEvent event) noexcept {
+        // Stale-generation events (queued across an offline transition or a
+        // lifecycle reset) are discarded by the audio thread instead of
+        // resurrecting after the boundary.
+        event.generation=uiGeneration_.load(std::memory_order_acquire);
+        const auto head=uiNoteHead_.load(std::memory_order_relaxed);
+        if(head-uiNoteTail_.load(std::memory_order_acquire)>=uiNoteCapacity){
+            if(event.kind==0&&event.note<128){
+                auto& latch=event.note<64?uiReleaseLatchLow_:uiReleaseLatchHigh_;
+                latch.fetch_or(std::uint64_t{1}<<(event.note&63),std::memory_order_release);
+                return true;}
+            uiNoteDropped_.fetch_add(1,std::memory_order_relaxed);return false;}
+        uiNoteRing_[head&(uiNoteCapacity-1)]=event;
+        uiNoteHead_.store(head+1,std::memory_order_release);return true;
+    }
+    // Editor close / focus-loss / panic cleanup: the audio thread flushes the
+    // queue, clears the latch and releases every UI-owned voice. Host notes
+    // are untouched (only a global Panic reaches them).
+    void cancelUiNotes() noexcept { uiCancelPending_.store(true,std::memory_order_release); }
+    // Offline transitions invalidate every queued editor event in both
+    // directions and request a UI release on the next block.
+    void setNonRealtime (bool isNonRealtime) noexcept override;
+    // Host-held key indication for the editor keyboard (audio-produced
+    // snapshot; the two halves may be read one tick apart — display only).
+    std::array<std::uint64_t,2> hostNoteMask() const noexcept {
+        return {hostNoteMaskLow_.load(std::memory_order_relaxed),
+                hostNoteMaskHigh_.load(std::memory_order_relaxed)};
+    }
+    unsigned uiNoteDropped() const noexcept { return uiNoteDropped_.load(std::memory_order_relaxed); }
     // Transient monitor state; never encoded into presets or host sessions.
     unsigned layerSoloMask() const noexcept { return layerSoloMask_.load(std::memory_order_relaxed); }
     void toggleLayerSolo(std::size_t index) noexcept {
@@ -194,6 +234,10 @@ public:
     std::uint64_t programRestoreEpoch() const noexcept { return programs_.programRevision(); }
     ProgramStore::VersionedProgram versionedProgram() const { return programs_.versionedProgram(); }
     bool editTonalityIfRevision(source::Tonality tonality,std::uint64_t revision) { return programs_.editTonalityIfRevision(tonality,revision); }
+    // Unconditional program-tonality edit for editors without a revision
+    // token (PERFORM pitch-key select); the versioned variant above stays
+    // for drag-guarded source edits.
+    bool editTonality(source::Tonality tonality) { return programs_.editTonality(tonality); }
     bool editCurveIfRevision(CurveTarget target, std::uint64_t revision, const timeline::Curve& curve) {
         return programs_.editCurveIfRevision(target, revision, curve);
     }
@@ -208,6 +252,16 @@ protected:
     bool isProductSection (preset::Tag tag) const override { return tag == compare::sectionTag || tag == fxSampleSectionTag || tag == fxParameterSectionTag || tag == fxFamilySectionTag || tag == fxProgramSectionTag || tag == fxEffectsSectionTag || tag == fxPatternSectionTag || tag == fxPatternEnableSectionTag || tag == fxMacroSectionTag || tag == fxMacroRouteSectionTag || tag == fxGeneratorSectionTag; }
 
 private:
+    static constexpr std::uint32_t uiNoteCapacity = 64; // power of two
+    bool uiNotePop(UiNoteEvent& out) noexcept {
+        const auto tail=uiNoteTail_.load(std::memory_order_relaxed);
+        if(tail==uiNoteHead_.load(std::memory_order_acquire))return false;
+        out=uiNoteRing_[tail&(uiNoteCapacity-1)];
+        uiNoteTail_.store(tail+1,std::memory_order_release);return true;
+    }
+    void flushUiNoteQueue() noexcept {
+        uiNoteTail_.store(uiNoteHead_.load(std::memory_order_acquire),std::memory_order_release);
+    }
     void publishPlayhead(bool rendered) noexcept;
     void publishTelemetry(unsigned events,bool clipped,bool fxTailOnly) noexcept {
         const auto value=events|(engine_.activeGrainCount()<<4)|(clipped?(1u<<11):0u)|(fxTailOnly?(1u<<12):0u);
@@ -273,6 +327,16 @@ private:
     static_assert(std::atomic<std::uint32_t>::is_always_lock_free && std::atomic<bool>::is_always_lock_free);
     std::atomic<std::uint32_t> telemetry_ { 0 }, droppedEvents_ { 0 };
     std::atomic<bool> clipLatched_ { false };
+    // UI keyboard queue (SPSC) and host-note indication snapshot.
+    static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
+    std::array<UiNoteEvent,uiNoteCapacity> uiNoteRing_{};
+    std::atomic<std::uint32_t> uiNoteHead_{0},uiNoteTail_{0};
+    std::atomic<unsigned> uiNoteDropped_{0};
+    std::atomic<std::uint64_t> uiReleaseLatchLow_{0},uiReleaseLatchHigh_{0};
+    std::atomic<bool> uiCancelPending_{false};
+    static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
+    std::atomic<std::uint32_t> uiGeneration_{0};
+    std::atomic<std::uint64_t> hostNoteMaskLow_{0},hostNoteMaskHigh_{0};
     std::atomic<PatternClock> patternClock_ { PatternClock::inactive };
     // Audio-thread-only transport history. Missing host position invalidates
     // continuity tracking; it never fabricates a seek.

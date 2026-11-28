@@ -3,13 +3,24 @@
 #include "components/VoxKnob.h"
 #include "components/VoxButton.h"
 #include "components/VoxComboBox.h"
+#include "components/VoxTabBar.h"
+#include "components/VoxKeyboard.h"
+#include "components/VoxModule.h"
+#include "components/VoxSectionHeader.h"
 #include "LayerPanel.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <deque>
+#include <vector>
+#include <utility>
 #include "engine/FileExport.h"
 #include "engine/ProgramStore.h"
 #include "engine/PresetLibrary.h"
 #include "engine/Preview.h"
+
+// String literals in this project are UTF-8; JUCE's String(const char*)
+// treats them as ASCII, so any literal outside 7-bit ASCII goes through
+// juce::String::fromUTF8 (see VOX design typography).
+inline juce::String u8 (const char* text) { return juce::String::fromUTF8 (text); }
 
 namespace vox::fx {
 class FxProcessor;
@@ -21,20 +32,24 @@ public:
     void resized() override;
     juce::ComboBox& styleSelector() noexcept { return style_; }
     juce::ComboBox& complexitySelector() noexcept { return complexity_; }
-    juce::Slider& intensitySlider() noexcept { return intensity_; }
-    juce::Slider& energySlider() noexcept { return energy_; }
-    juce::Slider& stereoSlider() noexcept { return stereo_; }
+    vox::ui::VoxKnob& intensitySlider() noexcept { return intensity_; }
+    vox::ui::VoxKnob& energySlider() noexcept { return energy_; }
+    vox::ui::VoxKnob& stereoSlider() noexcept { return stereo_; }
     juce::ComboBox& lockLayerSelector() noexcept { return lockLayer_; }
     juce::Button& fieldLock(std::size_t index) noexcept { return fieldLocks_[index]; }
 private:
     void timerCallback() override;
     FxProcessor& processor_;
     juce::ComboBox style_,complexity_,lockLayer_,role_,graphLock_;
-    std::array<juce::ToggleButton,12> fieldLocks_;
+    // Reference .fx-locks: compact ds-button toggle chips, not checkboxes.
+    std::array<vox::ui::VoxButton,12> fieldLocks_;
     juce::ToggleButton lockGroup_{"Lock selected group"};
     juce::TextButton fullGenerate_{"Generate sound"},fullMutate_{"Mutate sound"};
     juce::Label graphStatus_;
-    juce::Slider intensity_,energy_,stereo_;
+    // Reference recipe dials (compact mint arcs, value chip below).
+    vox::ui::VoxKnob intensity_ { "INTENSITY", vox::ui::VoxKnob::Size::Small },
+        energy_ { "ENERGY", vox::ui::VoxKnob::Size::Small },
+        stereo_ { "STEREO MOTION", vox::ui::VoxKnob::Size::Small };
     std::array<juce::Label,6> labels_;
     juce::TextButton close_ { "Close" };
 };
@@ -47,12 +62,18 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void refresh();
-    CurveEditor& editor() noexcept { return editor_; }
+    CurveEditor& editor() noexcept; // active scope editor
     juce::ComboBox& selector() noexcept { return selector_; }
+    juce::ComboBox& scopeSelector() noexcept { return scope_; }
+    static constexpr int scopeCount = 5; // Program + Layer A..D
 private:
     void refreshHint();
+    void applyScope();
+    CurveEditor& activeEditor() noexcept;
     CurveEditor editor_;
     vox::ui::VoxComboBox selector_;
+    vox::ui::VoxComboBox scope_;
+    std::array<std::unique_ptr<CurveEditor>,4> layerEditors_{};
     juce::TextButton undo_ { "Undo" }, redo_ { "Redo" }, reset_ { "Reset curve" };
     juce::Label hint_;
 };
@@ -78,12 +99,19 @@ private:
 class StructuralSlider final : public juce::Slider {
 public:
     std::function<void()> onStructuralChange;
+    // Optional display formatter (reference NumericValue unit suffix).
+    std::function<juce::String(double)> textFormatter;
     void valueChanged() override { if(onStructuralChange)onStructuralChange(); }
+    juce::String getTextFromValue(double value) override {
+        return textFormatter ? textFormatter(value) : juce::Slider::getTextFromValue(value);
+    }
 };
 
 class MotionPanel final : public juce::Component, private juce::ListBoxModel {
 public:
     explicit MotionPanel(FxProcessor&);
+    std::function<void()> onClosed; // invoked when the user closes the editor
+    void setEmbedded(bool embedded) noexcept; // workspace embed: no close chrome
     void paint(juce::Graphics&) override;
     void resized() override;
     void refresh(int row=-1);
@@ -135,6 +163,7 @@ public:
     void resized() override;
     juce::ComboBox& scaleSelector() noexcept { return scale_; }
     juce::ComboBox& rootSelector() noexcept { return root_; }
+    juce::ComboBox& layerSelector() noexcept { return layer_; }
     juce::ComboBox& typeSelector(std::size_t slot) noexcept { return filters_[slot].type; }
     juce::Slider& cutoffSlider(std::size_t slot) noexcept { return filters_[slot].hz; }
     juce::Slider& grainLengthSlider() noexcept {return grainLength_;}
@@ -143,6 +172,7 @@ public:
     juce::ComboBox& sliceGridSelector() noexcept {return sliceGrid_;}
     juce::ComboBox& sliceReadSelector() noexcept {return sliceRead_;}
     juce::ToggleButton& sliceGate(std::size_t i) noexcept {return sliceGate_[i];}
+    juce::Slider& familyControlSlider(std::size_t i) noexcept {return familyControls_[i];}
 private:
     void close();
     template <typename Edit> void editGlitch(Edit);
@@ -150,8 +180,10 @@ private:
     FxProcessor& processor_;
     juce::ComboBox layer_, root_, scale_;
     StructuralSlider transpose_,character_,grainLength_,grainPosition_,grainTravel_;
+    std::array<StructuralSlider,3> familyControls_;
     juce::ToggleButton scatter_{"Scatter"},reverse_{"Reverse"};
     juce::Label characterLabel_;
+    std::array<juce::Label,3> familyControlLabels_;
     juce::ComboBox sliceGrid_,sliceRead_;
     std::array<juce::ToggleButton,4> sliceGate_;
     juce::TextButton sliceReset_{"Reset slices"};
@@ -172,6 +204,8 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     std::function<void(bool)> looseFile;
+    std::function<void()> onClosed; // invoked when the user closes the browser
+    void setEmbedded(bool embedded); // workspace embed: no close button
     juce::TextEditor& searchField() noexcept {return search_;}
     juce::TextEditor& nameField() noexcept {return name_;}
     juce::TextButton& saveButton() noexcept {return save_;}
@@ -210,7 +244,7 @@ private:
     juce::ComboBox scope_,role_,mode_,editRole_,styleFacet_,moodFacet_,useFacet_,durationFacet_,tonalFacet_;
     juce::ToggleButton onlyFavorites_{"Favorites"},favorite_{"Favorite"};
     juce::Label title_,detail_,status_;
-    juce::TextButton load_{"Load"},play_{"Preview"},stop_{"Stop"},save_{"Save new"},tags_{"Save tags"},remove_{"Delete"},openFile_{"Open file…"},saveFile_{"Save file…"},close_{"Close"};
+    juce::TextButton load_{"Load"},play_{"Preview"},stop_{"Stop"},save_{"Save new"},tags_{"Save tags"},remove_{"Delete"},openFile_{u8("Open file…")},saveFile_{u8("Save file…")},close_{"Close"};
     std::unique_ptr<preview::Job> audition_;
     std::unique_ptr<library::IndexJob> indexJob_;
     juce::String indexStatus_;
@@ -252,8 +286,24 @@ public:
     ~FxPanel() override;
     void paint (juce::Graphics&) override;
     void resized() override;
+    // Eight functional workspaces (TZ 13.2). One workspace shows at a time;
+    // overlays (Source/Motion/Generator/Presets/WAV options) keep their
+    // existing open/close behaviour on top of the current workspace.
+    enum class Workspace { design=0, perform, timeline, motion, process, trigger, presets, advanced, count };
+    static constexpr int workspaceCount = static_cast<int>(Workspace::count);
+    // Reference tab order (PR #160): PERFORM, DESIGN, TIMELINE, ... Tab
+    // positions map onto the Workspace enum through this table.
+    static constexpr Workspace tabWorkspaces[workspaceCount] {
+        Workspace::perform, Workspace::design, Workspace::timeline, Workspace::motion,
+        Workspace::process, Workspace::trigger, Workspace::presets, Workspace::advanced };
+    void setWorkspace (Workspace workspace);
+    Workspace workspace() const noexcept { return workspace_; }
+    vox::ui::VoxKeyboard& keyboard() noexcept { return keyboard_; }
+    vox::ui::VoxTabBar& workspaceTabs() noexcept { return workspaceTabs_; }
+    // Eight visible, host-automatable macro knobs (TZ 13.2 PERFORM).
+    vox::ui::VoxKnob& macroKnob(std::size_t index) noexcept { return macroKnobs_[index]; }
     juce::Slider& outputSlider() noexcept { return output_.getSlider(); }
-    juce::Slider& durationSlider() noexcept { return duration_.getSlider(); }
+    juce::Slider& durationSlider() noexcept { return duration_; }
     juce::ComboBox& comparisonSelector() noexcept { return comparison_; }
     juce::ComboBox& factorySelector() noexcept { return factory_; }
     juce::ComboBox& familySelector() noexcept { return family_; }
@@ -297,6 +347,9 @@ public:
     LayerPanel& layerPanel(std::size_t index) noexcept { return *layers_[index]; }
 private:
     void timerCallback() override;
+    void focusLost (juce::Component::FocusChangeType cause) override;
+    void applyWorkspaceVisibility();
+    void syncModuleLabels();
     void importSample();
     void exportPattern(bool drag=false);
     void beginFileDrag();
@@ -311,22 +364,25 @@ private:
     void finishPatternDrag();
     void refreshMacro();
     void refreshGenerator();
+    void openTimelineCurve (std::size_t layer, int kind);
+    void refreshEffectSemantics(std::size_t);
     FxProcessor& processor_;
     SavePicker savePicker_;
     ExternalDrag externalDrag_;
     vox::ui::VoxKnob output_ { "OUTPUT", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment attachment_;
-    vox::ui::VoxKnob duration_ { "DURATION (S)", vox::ui::VoxKnob::Size::Large };
+    // Event duration: reference seed-row NumericValue chip (seconds), not a dial.
+    StructuralSlider duration_;
     juce::SliderParameterAttachment durationAttachment_;
     vox::ui::VoxComboBox family_,eventBars_,playMode_,triggerPolicy_,macroSelector_,macroDestination_,factory_,comparison_;
     juce::Label clockStatus_,fxTailStatus_;
     juce::Slider macroValue_,macroDepth_;
     std::unique_ptr<juce::SliderParameterAttachment> macroAttachment_;
-    vox::ui::VoxButton audition_ { "AUDITION" }, stopAudition_ { "STOP" };
+    vox::ui::VoxButton audition_ { "Preview event" }, stopAudition_ { "Clear events" };
     vox::ui::VoxButton panic_ { "PANIC" };
     juce::Slider seed_;
-    vox::ui::VoxButton generate_ { "GENERATE" };
-    vox::ui::VoxButton mutate_ { "MUTATE" };
+    vox::ui::VoxButton generate_ { "Generate program", vox::ui::VoxButton::Type::Primary };
+    vox::ui::VoxButton mutate_ { "Mutate" };
     juce::TextButton generatorSettings_ { "Settings" };
     std::unique_ptr<GeneratorPanel> generatorPanel_;
     vox::ui::VoxButton midiExport_ { "MIDI" };
@@ -371,5 +427,49 @@ private:
     std::array<float,2> shownPeaks_{};
     unsigned shownEvents_=0,shownGrains_=0,clipHold_=0,fxTailHold_=0;
     std::uint32_t shownDropped_=0;
+    // Workspace shell: tab strip, section header, persistent keyboard.
+    vox::ui::VoxTabBar workspaceTabs_;
+    vox::ui::VoxKeyboard keyboard_;
+    // Reference module chrome (PR #160 ds-panel anatomy).
+    vox::ui::VoxModule generatorModule_ { u8("Program Generator"), "SEEDED", vox::ui::VoxModule::Tone::accent };
+    vox::ui::VoxModule previewModule_ { "Event Preview", "LIVE DSP" };
+    vox::ui::VoxModule macrosModule_ { "Performance Macros", "08 MACROS", vox::ui::VoxModule::Tone::accent };
+    vox::ui::VoxModule designModule_ { "Layer Design", "A-D + CURVES" };
+    vox::ui::VoxModule timelineModule_ { "Event Timeline", "20 EDITABLE CURVES", vox::ui::VoxModule::Tone::accent };
+    vox::ui::VoxModule motionModule_ { "Motion Matrix", "64 ROUTES" };
+    vox::ui::VoxModule flowModule_ { "Signal Flow", "A-D SUM > 01-04 > MASTER" };
+    vox::ui::VoxModule slotsModule_ { "FX Slots", "4 SERIAL STAGES" };
+    vox::ui::VoxModule outputModule_ { "Output & Tails", "MASTER" };
+    vox::ui::VoxModule patternModule_ { "Trigger Pattern", "HOST 4/4" };
+    vox::ui::VoxModule presetsModule_ { "Preset Library", "SEARCH / TAGS / A-B" };
+    vox::ui::VoxModule advancedModule_ { "Instance Diagnostics", "REAL COUNTS", vox::ui::VoxModule::Tone::warning };
+    juce::Rectangle<int> previewSummaryBounds_;
+    juce::Rectangle<int> flowTrackBounds_;
+    struct PaintLabel { juce::Rectangle<int> bounds; juce::String text; int workspace; };
+    std::vector<PaintLabel> paintLabels_;
+    // Labels and overlays drawn ABOVE the module chrome (children paint after
+    // their parent, so a Label child sits over the module backdrop).
+    std::array<juce::Label,16> moduleLabels_ {};
+    juce::Label previewName_, previewMeta_;
+    juce::Label programEyebrow_, programName_;
+    // Event Preview chart: real program data (grid + program amplitude
+    // trajectory + configured phase strip), never a mock meter.
+    struct EventChart : juce::Component {
+        FxProcessor& processor;
+        explicit EventChart (FxProcessor& p) : processor (p) {}
+        void paint (juce::Graphics&) override;
+    };
+    EventChart eventChart_;
+    struct FlowTrack : juce::Component {
+        juce::String slots[4]; bool active[4] {};
+        void paint (juce::Graphics& g) override;
+    };
+    FlowTrack flowTrack_;
+    std::array<vox::ui::VoxKnob,8> macroKnobs_ {};
+    std::array<std::unique_ptr<juce::SliderParameterAttachment>,8> macroKnobAttachments_;
+    vox::ui::VoxSectionHeader workspaceHeader_;
+    Workspace workspace_ = Workspace::design;
+    bool syncingTabs_ = false;
+    juce::Rectangle<int> meterBounds_, macroLabelBounds_, fxLabelBounds_;
 };
 } // namespace vox::fx

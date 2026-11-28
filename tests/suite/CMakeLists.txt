@@ -492,6 +492,30 @@ target_include_directories(suite_fx_transport_tests PRIVATE ${PROJECT_SOURCE_DIR
 add_test(NAME suite_fx_transport_tests COMMAND suite_fx_transport_tests)
 set_tests_properties(suite_fx_transport_tests PROPERTIES LABELS suite)
 
+# Gain staging: measures all 232 frozen review recipes (owner loudness report)
+# and holds non-silence / no-clip regressions at output=1.0.
+add_executable(suite_fx_gain_staging_tests FxGainStagingTests.cpp)
+vox_suite_add_allocation_probe(suite_fx_gain_staging_tests)
+# sample::decodeWav (asset-cue sources) hashes with juce::SHA256.
+target_include_directories(suite_fx_gain_staging_tests PRIVATE ${PROJECT_SOURCE_DIR}/products/fx ${juce_SOURCE_DIR}/modules)
+target_compile_definitions(suite_fx_gain_staging_tests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(suite_fx_gain_staging_tests PRIVATE vox_preset juce::juce_cryptography)
+add_test(NAME suite_fx_gain_staging_tests COMMAND suite_fx_gain_staging_tests)
+set_tests_properties(suite_fx_gain_staging_tests PROPERTIES LABELS suite)
+
+add_executable(suite_fx_ui_workspace_keyboard_tests FxUiWorkspaceKeyboardTests.cpp)
+vox_suite_add_allocation_probe(suite_fx_ui_workspace_keyboard_tests)
+target_include_directories(suite_fx_ui_workspace_keyboard_tests PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/products/fx ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+target_link_libraries(suite_fx_ui_workspace_keyboard_tests PRIVATE ${VOX_SUITE_fx_TARGET})
+add_test(NAME suite_fx_ui_workspace_keyboard_tests COMMAND suite_fx_ui_workspace_keyboard_tests)
+set_tests_properties(suite_fx_ui_workspace_keyboard_tests PROPERTIES LABELS suite)
+
+# UI render harness: offscreen PNG evidence matrix; --windowed for the
+# native owner screenshot pass. Not registered as a test.
+add_executable(fx_ui_render_harness FxUiRenderHarness.cpp)
+target_include_directories(fx_ui_render_harness PRIVATE ${juce_SOURCE_DIR}/modules ${PROJECT_SOURCE_DIR}/products/fx ${PROJECT_SOURCE_DIR}/libs/vox-ui)
+target_link_libraries(fx_ui_render_harness PRIVATE ${VOX_SUITE_fx_TARGET})
+
 add_executable(suite_fx_pattern_benchmark FxPatternBenchmark.cpp)
 target_include_directories(suite_fx_pattern_benchmark PRIVATE ${PROJECT_SOURCE_DIR}/products/fx)
 add_test(NAME suite_fx_pattern_benchmark COMMAND suite_fx_pattern_benchmark)
@@ -536,7 +560,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_compile_definitions(suite_fx_runtime_stress_tests PRIVATE VOX_FX_LOCK_PROBE=1)
   target_link_options(suite_fx_runtime_stress_tests PRIVATE
     -Wl,--wrap=pthread_mutex_lock -Wl,--wrap=pthread_mutex_trylock
-    -Wl,--wrap=pthread_rwlock_rdlock -Wl,--wrap=pthread_rwlock_wrlock)
+    -Wl,--wrap=pthread_mutex_timedlock
+    -Wl,--wrap=pthread_rwlock_rdlock -Wl,--wrap=pthread_rwlock_tryrdlock
+    -Wl,--wrap=pthread_rwlock_wrlock -Wl,--wrap=pthread_rwlock_trywrlock
+    -Wl,--wrap=pthread_spin_lock
+    -Wl,--wrap=pthread_cond_wait -Wl,--wrap=pthread_cond_timedwait
+    -Wl,--wrap=sem_wait -Wl,--wrap=sem_timedwait)
+elseif(WIN32)
+  target_sources(suite_fx_runtime_stress_tests PRIVATE FxLockProbeWindows.c)
+  target_compile_definitions(suite_fx_runtime_stress_tests PRIVATE VOX_FX_LOCK_PROBE=1)
+  target_link_libraries(suite_fx_runtime_stress_tests PRIVATE psapi)
 endif()
 add_test(NAME suite_fx_runtime_stress_tests COMMAND suite_fx_runtime_stress_tests)
-set_tests_properties(suite_fx_runtime_stress_tests PROPERTIES LABELS suite)
+set_tests_properties(suite_fx_runtime_stress_tests PROPERTIES LABELS suite TIMEOUT 180)
