@@ -19,7 +19,7 @@ int whiteIndexInOctave (int note) noexcept
 }
 } // namespace
 
-VoxKeyboard::VoxKeyboard()
+VoxKeyboard::VoxKeyboard() : accent_ (tokens::colour::accent)
 {
     setWantsKeyboardFocus (true);
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
@@ -374,18 +374,22 @@ void VoxKeyboard::paint (juce::Graphics& g)
     // Piano keys: ALL whites first, then ALL blacks on top, so later white
     // keys never overpaint an earlier black key's overlap column.
     const auto now = juce::Time::getMillisecondCounter();
-    const auto white = text.interpolatedWith (panel, 0.18); // light rubber faces
-    const auto black = control;
+    const auto holdColour = accent_;
+    // Reference piano faces (Gate-1 language): light gradient keys with an
+    // inset bottom shadow, dark accidentals, mono labels.
+    const auto whiteTop = juce::Colour (0xffb1b6c1);
+    const auto whiteBottom = juce::Colour (0xffe8e9ed);
+    const auto black = panelRaised;
     const auto faceFor = [&] (int note, bool isBlackKey) {
         const bool pulsing = pulseUntil_[static_cast<std::size_t> (note)] > now;
         const bool isHeld = held (note);
         // Event mode (one-shot): a held press shows only the launch flash,
         // never a sustained gate visual.
         const bool showHeld = isHeld && !(eventMode_ && !pulsing);
-        if (pulsing) return accentHover;
-        if (showHeld) return isBlackKey ? accent : accent;
-        if (external (note)) return isBlackKey ? accentDim : white.interpolatedWith (accentDim, 0.45);
-        return isBlackKey ? black : white;
+        if (pulsing) return holdColour;
+        if (showHeld) return holdColour;
+        if (external (note)) return isBlackKey ? accentDim : whiteBottom.interpolatedWith (accentDim, 0.45);
+        return isBlackKey ? black : whiteBottom;
     };
     for (int note = firstVisibleNote(); note <= lastVisibleNote(); ++note)
     {
@@ -394,13 +398,15 @@ void VoxKeyboard::paint (juce::Graphics& g)
         if (kb.isEmpty()) continue;
         g.setColour (faceFor (note, false));
         g.fillRoundedRectangle (kb.toFloat().reduced (0.5f, 0.5f), 2.0f);
+        g.setColour (juce::Colour (0x33777c8a)); // inset bottom shadow
+        g.fillRoundedRectangle (kb.toFloat().removeFromBottom (8).reduced (1, 2), 2.0f);
         const bool flash = pulseUntil_[static_cast<std::size_t> (note)] > now ||
                            (held (note) && !eventMode_);
-        g.setColour (flash ? border : borderSubtle);
+        g.setColour (flash ? accent_ : borderSubtle);
         g.drawRoundedRectangle (kb.toFloat().reduced (0.5f), 2.0f, 1.0f);
         if (note % 12 == 0)
         {
-            g.setColour (flash ? background : textMuted);
+            g.setColour (flash ? holdColour.darker (0.4f) : juce::Colour (0xff22252a));
             g.setFont (typography::valueText());
             g.drawText ("C" + juce::String (note / 12), kb.removeFromBottom (14),
                         juce::Justification::centred);
@@ -413,7 +419,7 @@ void VoxKeyboard::paint (juce::Graphics& g)
         if (kb.isEmpty()) continue;
         g.setColour (faceFor (note, true));
         g.fillRoundedRectangle (kb.toFloat(), 2.0f);
-        g.setColour (border);
+        g.setColour (juce::Colour (0xff565c66));
         g.drawRoundedRectangle (kb.toFloat().reduced (0.5f), 2.0f, 1.0f);
     }
 

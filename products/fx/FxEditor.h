@@ -5,10 +5,13 @@
 #include "components/VoxComboBox.h"
 #include "components/VoxTabBar.h"
 #include "components/VoxKeyboard.h"
+#include "components/VoxModule.h"
 #include "components/VoxSectionHeader.h"
 #include "LayerPanel.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <deque>
+#include <vector>
+#include <utility>
 #include "engine/FileExport.h"
 #include "engine/ProgramStore.h"
 #include "engine/PresetLibrary.h"
@@ -332,6 +335,7 @@ private:
     void timerCallback() override;
     void focusLost (juce::Component::FocusChangeType cause) override;
     void applyWorkspaceVisibility();
+    void syncModuleLabels();
     void importSample();
     void exportPattern(bool drag=false);
     void beginFileDrag();
@@ -358,11 +362,11 @@ private:
     juce::Label clockStatus_,fxTailStatus_;
     juce::Slider macroValue_,macroDepth_;
     std::unique_ptr<juce::SliderParameterAttachment> macroAttachment_;
-    vox::ui::VoxButton audition_ { "AUDITION" }, stopAudition_ { "STOP" };
+    vox::ui::VoxButton audition_ { "Preview event" }, stopAudition_ { "Clear events" };
     vox::ui::VoxButton panic_ { "PANIC" };
     juce::Slider seed_;
-    vox::ui::VoxButton generate_ { "GENERATE" };
-    vox::ui::VoxButton mutate_ { "MUTATE" };
+    vox::ui::VoxButton generate_ { "Generate program" };
+    vox::ui::VoxButton mutate_ { "Mutate" };
     juce::TextButton generatorSettings_ { "Settings" };
     std::unique_ptr<GeneratorPanel> generatorPanel_;
     vox::ui::VoxButton midiExport_ { "MIDI" };
@@ -410,6 +414,32 @@ private:
     // Workspace shell: tab strip, section header, persistent keyboard.
     vox::ui::VoxTabBar workspaceTabs_;
     vox::ui::VoxKeyboard keyboard_;
+    // Reference module chrome (PR #160 ds-panel anatomy).
+    vox::ui::VoxModule generatorModule_ { u8("Program Generator"), "SEEDED", vox::ui::VoxModule::Tone::accent };
+    vox::ui::VoxModule previewModule_ { "Event Preview", "LIVE DSP" };
+    vox::ui::VoxModule macrosModule_ { "Performance Macros", "08 MACROS", vox::ui::VoxModule::Tone::accent };
+    vox::ui::VoxModule designModule_ { "Layer Design", "A-D + CURVES" };
+    vox::ui::VoxModule timelineModule_ { "Event Timeline", "20 EDITABLE CURVES", vox::ui::VoxModule::Tone::accent };
+    vox::ui::VoxModule motionModule_ { "Motion Matrix", "64 ROUTES" };
+    vox::ui::VoxModule flowModule_ { "Signal Flow", "A-D SUM > 01-04 > MASTER" };
+    vox::ui::VoxModule slotsModule_ { "FX Slots", "4 SERIAL STAGES" };
+    vox::ui::VoxModule outputModule_ { "Output & Tails", "MASTER" };
+    vox::ui::VoxModule patternModule_ { "Trigger Pattern", "HOST 4/4" };
+    vox::ui::VoxModule presetsModule_ { "Preset Library", "SEARCH / TAGS / A-B" };
+    vox::ui::VoxModule advancedModule_ { "Instance Diagnostics", "REAL COUNTS", vox::ui::VoxModule::Tone::warning };
+    juce::Rectangle<int> previewSummaryBounds_;
+    juce::Rectangle<int> flowTrackBounds_;
+    struct PaintLabel { juce::Rectangle<int> bounds; juce::String text; int workspace; };
+    std::vector<PaintLabel> paintLabels_;
+    // Labels and overlays drawn ABOVE the module chrome (children paint after
+    // their parent, so a Label child sits over the module backdrop).
+    std::array<juce::Label,16> moduleLabels_ {};
+    juce::Label previewName_, previewMeta_;
+    struct FlowTrack : juce::Component {
+        juce::String slots[4]; bool active[4] {};
+        void paint (juce::Graphics& g) override;
+    };
+    FlowTrack flowTrack_;
     std::array<vox::ui::VoxKnob,8> macroKnobs_ {};
     std::array<std::unique_ptr<juce::SliderParameterAttachment>,8> macroKnobAttachments_;
     vox::ui::VoxSectionHeader workspaceHeader_;

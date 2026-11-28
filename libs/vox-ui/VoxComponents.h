@@ -7,3 +7,4 @@
 #include "components/VoxTabBar.h"
 #include "components/VoxSectionHeader.h"
 #include "components/VoxKeyboard.h"
+#include "components/VoxModule.h"

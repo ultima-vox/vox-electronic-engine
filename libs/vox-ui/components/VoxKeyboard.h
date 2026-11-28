@@ -53,6 +53,8 @@ public:
     bool pulseActive (int note) const noexcept;
     void setEventMode (bool oneShotEventMode) noexcept { eventMode_ = oneShotEventMode; }
     bool eventMode() const noexcept { return eventMode_; }
+    // Product accent override (defaults to the shared design token).
+    void setAccent (juce::Colour colour) noexcept { accent_ = colour; }
 
     // Release every note this control holds (focus loss, editor close,
     // panic). Fires onNoteOff per held note, then onAllNotesOff.
@@ -100,6 +102,7 @@ private:
     bool cursorHeld_ = false;  // Space/Enter is physically down
     bool velocityDragging_ = false;
     bool eventMode_ = false;   // one-shot visual policy
+    juce::Colour accent_;      // defaults to tokens::colour::accent
     int cursorNote_ = 60;      // keyboard-focus cursor (middle C)
     juce::Rectangle<int> octaveMinusBounds_, octavePlusBounds_, velocityBounds_;
 

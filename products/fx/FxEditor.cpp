@@ -54,8 +54,8 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     complexity_.onChange=[this]{const auto value=complexity_.getSelectedId();
         (void)processor_.editGeneratorState([value](generator::ControllerState& s){s.complexity=value;});};
     auto configure=[this](juce::Slider& slider,const char* title){slider.setRange(0,1,.01);
-        slider.setTitle(title);slider.setSliderStyle(juce::Slider::LinearHorizontal);
-        slider.setTextBoxStyle(juce::Slider::TextBoxRight,false,50,24);addAndMakeVisible(slider);};
+        slider.setTitle(title);slider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle(juce::Slider::TextBoxBelow,false,54,13);};
     configure(intensity_,"Generator intensity");configure(energy_,"Generator energy");configure(stereo_,"Generator stereo spread");
     intensity_.onValueChange=[this]{const auto v=static_cast<float>(intensity_.getValue());
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.intensity=v;});};
@@ -63,7 +63,10 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.energy=v;});};
     stereo_.onValueChange=[this]{const auto v=static_cast<float>(stereo_.getValue());
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.stereo=v;});};
-    addAndMakeVisible(style_);addAndMakeVisible(complexity_);addAndMakeVisible(close_);
+    // style_/complexity_/intensity_/energy_/stereo_ and fieldLocks_ are
+    // re-parented into the PERFORM Program-Generator module (reference
+    // composition); this overlay keeps role/graph locks and status.
+    addAndMakeVisible(close_);
     for(int i=0;i<4;++i)lockLayer_.addItem("Layer " + juce::String::charToString(static_cast<juce::juce_wchar>('A'+i)),i+1);
     lockLayer_.setSelectedId(1,juce::dontSendNotification);lockLayer_.setTitle("Layer for generator locks");
     lockLayer_.onChange=[this]{timerCallback();};addAndMakeVisible(lockLayer_);
@@ -76,7 +79,7 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
             const bool locked=fieldLocks_[i].getToggleState();
             (void)processor_.editGeneratorState([layer,bit,locked](generator::ControllerState& s){
                 auto& mask=s.locks.layers[static_cast<std::size_t>(layer)];if(locked)mask|=bit;else mask&=~bit;});};
-        addAndMakeVisible(button);
+        // fieldLocks_ live in the PERFORM module; the overlay edits lockLayer_. 
     }
     close_.onClick=[this]{setVisible(false);};timerCallback();startTimerHz(15);
 }
@@ -1088,8 +1091,8 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     panic_.onClick = [this] { keyboard_.releaseAllNotes(); processor_.panic(); };
     seed_.setRange (1, 2147483647, 1);
     seed_.setValue (processor_.generatorState().seed, juce::dontSendNotification);
-    seed_.setSliderStyle (juce::Slider::LinearHorizontal);
-    seed_.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 85, 25);
+    seed_.setSliderStyle (juce::Slider::LinearBar);
+    seed_.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 40, 24);
     seed_.setTitle ("Generator seed");
     seed_.setTooltip ("Deterministic seed for Generate and Mutate");
     seed_.onValueChange=[this] {const auto seed=static_cast<std::uint32_t>(seed_.getValue());
@@ -1282,9 +1285,53 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         (void)processor_.pushUiNote({0,static_cast<std::uint8_t>(note),0});};
     keyboard_.onAllNotesOff=[this]{processor_.cancelUiNotes();};
     addAndMakeVisible(keyboard_);
+    keyboard_.setAccent(vox::ui::tokens::colour::fx::accent);
+    for (auto* module : std::array<vox::ui::VoxModule*,12>{ &generatorModule_, &previewModule_,
+                 &macrosModule_, &designModule_, &timelineModule_, &motionModule_, &flowModule_,
+                 &slotsModule_, &outputModule_, &patternModule_, &presetsModule_, &advancedModule_ })
+    {
+        addChildComponent(*module);
+        // Module chrome sits behind the controls it hosts: it is a backdrop,
+        // not an opaque sibling on top of them.
+        module->toBack();
+    }
+    for (auto& label : moduleLabels_) {
+        label.setJustificationType(juce::Justification::centredLeft);
+        label.setColour(juce::Label::textColourId, vox::ui::tokens::colour::textSecondary);
+        label.setFont(vox::ui::typography::eyebrow());
+        label.setInterceptsMouseClicks(false,false);
+        addChildComponent(label);
+    }
+    for (auto* label : { &previewName_, &previewMeta_ }) {
+        label->setJustificationType(juce::Justification::centredLeft);
+        label->setInterceptsMouseClicks(false,false);
+        addChildComponent(*label);
+    }
+    previewName_.setColour(juce::Label::textColourId, vox::ui::tokens::colour::text);
+    previewName_.setFont(vox::ui::typography::sectionTitle());
+    previewMeta_.setColour(juce::Label::textColourId, vox::ui::tokens::colour::textMuted);
+    previewMeta_.setFont(vox::ui::typography::mono(10.0f));
+    flowTrack_.setInterceptsMouseClicks(false,false);
+    addChildComponent(flowTrack_);
+    // Recipe controls re-parented into the PERFORM Program-Generator module.
+    generatorPanel().styleSelector().setSelectedId (processor_.generatorState().style + 1, juce::dontSendNotification);
+    generatorPanel().complexitySelector().setSelectedId (processor_.generatorState().complexity, juce::dontSendNotification);
+    // (reference composition). They are GeneratorPanel members; the panel
+    // owns them visually now, the overlay keeps its own controls.
+    for (auto* control : std::array<juce::Component*,17>{
+             &generatorPanel().styleSelector(), &generatorPanel().complexitySelector(),
+             &generatorPanel().intensitySlider(), &generatorPanel().energySlider(),
+             &generatorPanel().stereoSlider(),
+             &generatorPanel().fieldLock(0), &generatorPanel().fieldLock(1),
+             &generatorPanel().fieldLock(2), &generatorPanel().fieldLock(3),
+             &generatorPanel().fieldLock(4), &generatorPanel().fieldLock(5),
+             &generatorPanel().fieldLock(6), &generatorPanel().fieldLock(7),
+             &generatorPanel().fieldLock(8), &generatorPanel().fieldLock(9),
+             &generatorPanel().fieldLock(10), &generatorPanel().fieldLock(11) })
+        addChildComponent (control);
     // Eight visible macro knobs bound to the real host macro parameters.
     for(std::size_t i=0;i<macroKnobs_.size();++i){
-        const auto name=juce::String("MACRO ")+juce::String(static_cast<int>(i+1));
+        const auto name=juce::String("M")+juce::String(static_cast<int>(i+1));
         macroKnobs_[i].setLabel(name);
         macroKnobs_[i].setTooltip(name+u8(" — host-automatable macro value with automation readback"));
         macroKnobs_[i].getSlider().setTitle(name);
@@ -1308,23 +1355,38 @@ FxPanel::~FxPanel()
 void FxPanel::paint (juce::Graphics& g)
 {
     namespace c = vox::ui::tokens::colour;
+    namespace t = vox::ui::tokens;
     g.fillAll (c::background);
-    // Matte work surface behind the central workspace band (TZ 13.1 look).
-    auto surface = getLocalBounds().reduced (12, 8);
-    surface.removeFromTop (getLocalBounds().getWidth() < 1280 ? 88 : 48); // chrome
-    surface.removeFromBottom (118); // persistent keyboard strip
-    g.setColour (c::panel);
-    g.fillRoundedRectangle (surface.toFloat(), 8.0f);
-    g.setColour (c::borderSubtle);
-    g.drawRoundedRectangle (surface.toFloat().reduced (0.5f), 8.0f, 1.0f);
-    g.setFont (vox::ui::typography::controlLabel());
+    // Reference product identity (PR #160 shell): raised icon square, mono
+    // eyebrow, display title — painted, no WebView, no image assets.
+    {
+        auto header = getLocalBounds().removeFromTop (52).reduced (16, 4);
+        auto icon = header.removeFromLeft (30).removeFromBottom (30).translated (0, -1);
+        g.setColour (c::panelRaised);
+        g.fillRoundedRectangle (icon.toFloat(), 6.0f);
+        g.setColour (c::fx::accent);
+        g.drawRoundedRectangle (icon.toFloat().reduced (0.5f), 6.0f, 1.0f);
+        g.setFont (vox::ui::typography::mono (12.0f));
+        g.drawText ("FX", icon, juce::Justification::centred);
+        auto id = header.removeFromLeft (240);
+        g.setColour (c::textSecondary);
+        g.setFont (vox::ui::typography::eyebrow());
+        g.drawText ("INSTRUMENT 02 / EVENT DESIGN", id.removeFromTop (13), juce::Justification::centredLeft);
+        g.setColour (c::text);
+        g.setFont (vox::ui::typography::productTitle());
+        g.drawText ("VOX FX", id.removeFromTop (24), juce::Justification::centredLeft);
+    }
+    // Module-hosted labels/summary/flow track are child components (they
+    // must paint above the module chrome).
     if (workspace_ == Workspace::motion && !macroLabelBounds_.isEmpty()) {
         g.setColour (c::textSecondary);
+        g.setFont (vox::ui::typography::eyebrow());
         g.drawText ("SOURCE        TARGET                          VALUE        DEPTH",
                     macroLabelBounds_, juce::Justification::centredLeft);
     }
     if (workspace_ == Workspace::process && !fxLabelBounds_.isEmpty()) {
         g.setColour (c::textSecondary);
+        g.setFont (vox::ui::typography::eyebrow());
         auto rest = fxLabelBounds_;
         const int labelWidth = fxLabelBounds_.getWidth() / 4;
         for (int i = 0; i < 4; ++i) {
@@ -1336,16 +1398,16 @@ void FxPanel::paint (juce::Graphics& g)
     // Real stereo peak / clip meter from rendered block samples.
     if (meterBounds_.isEmpty()) return;
     auto meter = meterBounds_;
-    g.setColour (c::panelRaised);
-    g.fillRoundedRectangle (meter.toFloat(), 4.0f);
-    auto text = meter.reduced (6, 3);
+    g.setColour (c::control);
+    g.fillRoundedRectangle (meter.toFloat(), 5.0f);
+    g.setColour (c::border);
+    g.drawRoundedRectangle (meter.toFloat().reduced (0.5f), 5.0f, 1.0f);
+    auto text = meter.reduced (7, 4);
     g.setColour (c::text);
-    g.setFont (vox::ui::typography::valueText());
-    auto titleRow = text.removeFromTop (12);
-    g.drawText (clipHold_ ? "STEREO PEAK  /  CLIP" : "STEREO PEAK", titleRow,
+    g.setFont (vox::ui::typography::mono (10.0f));
+    auto titleRow = text.removeFromTop (13);
+    g.drawText (clipHold_ ? "STEREO PEAK / CLIP" : "STEREO PEAK", titleRow,
                 juce::Justification::centredLeft);
-    // Telemetry shares the title row so the meter stays readable even in the
-    // compact chrome (the tracks fill the rest of the meter height).
     g.setColour (c::textMuted);
     g.drawText ("EV " + juce::String (shownEvents_) + "/8+4  GR " + juce::String (shownGrains_) +
                     "/64  DROP " + juce::String (static_cast<juce::int64> (shownDropped_)),
@@ -1357,107 +1419,164 @@ void FxPanel::paint (juce::Graphics& g)
         g.drawText (ch == 0 ? "L" : "R", row.removeFromLeft (12), juce::Justification::centredLeft);
         const auto db = juce::Decibels::gainToDecibels (shownPeaks_[ch], -60.f);
         auto track = row.reduced (0, 1).toFloat();
-        g.setColour (c::panel);
+        g.setColour (c::background);
         g.fillRoundedRectangle (track, 2.f);
-        g.setColour (clipHold_ ? c::danger : c::accent);
+        g.setColour (clipHold_ ? c::danger : c::fx::accent);
         g.fillRoundedRectangle (track.withWidth (track.getWidth() * juce::jlimit (0.f, 1.f, (db + 60.f) / 60.f)), 2.f);
     }
 }
 void FxPanel::resized()
 {
     auto bounds = getLocalBounds();
-    // Top chrome: workspace tabs, real peak meter, host clock, panic. Below
-    // 1280 px the tab strip gets its own full-width row so all eight tabs
-    // keep readable targets instead of squeezing under the meter row.
-    if (bounds.getWidth() < 1280) {
-        auto tabsRow = bounds.removeFromTop (44).reduced (16, 6);
-        workspaceTabs_.setBounds (tabsRow);
-        auto metaRow = bounds.removeFromTop (40).reduced (16, 4);
-        panic_.setBounds (metaRow.removeFromRight (96).reduced (2, 0));
-        metaRow.removeFromRight (8);
-        clockStatus_.setBounds (metaRow.removeFromRight (170).reduced (4, 0));
-        meterBounds_ = metaRow.removeFromRight (230).reduced (2);
-    } else {
-        auto top = bounds.removeFromTop (48).reduced (16, 6);
-        panic_.setBounds (top.removeFromRight (96).reduced (2, 0));
-        top.removeFromRight (8);
-        clockStatus_.setBounds (top.removeFromRight (170).reduced (4, 0));
-        meterBounds_ = top.removeFromRight (230).reduced (2);
-        top.removeFromRight (8);
-        workspaceTabs_.setBounds (top);
-    }
-    // Persistent native performance keyboard along the bottom (TZ 13.2 /
-    // design 5.4): visible in every workspace.
+    // Chrome row 1: product identity (painted) + meter/clock/panic.
+    auto top = bounds.removeFromTop (52).reduced (16, 4);
+    panic_.setBounds (top.removeFromRight (88).reduced (2, 0));
+    top.removeFromRight (8);
+    clockStatus_.setBounds (top.removeFromRight (150).reduced (4, 0));
+    meterBounds_ = top.removeFromRight (250).reduced (2);
+    // Chrome row 2: zone tabs (reference fx-nav) + workspace header text.
+    auto tabsRow = bounds.removeFromTop (38).reduced (16, 2);
+    workspaceTabs_.setBounds (tabsRow.removeFromLeft (juce::jmax (520, tabsRow.getWidth() * 3 / 5)));
+    tabsRow.removeFromLeft (8);
+    clockStatus_.setBounds (tabsRow.removeFromRight (150).reduced (4, 0));
+    // Persistent native performance keyboard along the bottom (owner request).
     keyboard_.setBounds (bounds.removeFromBottom (118).reduced (16, 8));
-    // Central workspace band.
-    auto central = bounds.reduced (16, 4);
-    workspaceHeader_.setBounds (central.removeFromTop (28));
-    central.removeFromTop (6);
-    macroLabelBounds_ = {};
-    fxLabelBounds_ = {};
-    // Every workspace is laid out on each resize so bounds stay valid for
-    // tests and for instant tab switches; visibility selects the live one.
+    // Central workspace band composed of reference modules.
+    auto central = bounds.reduced (16, 6);
+    macroLabelBounds_ = {}; fxLabelBounds_ = {};
+    previewSummaryBounds_ = {}; flowTrackBounds_ = {};
+    paintLabels_.clear();
+    // VoxModule::bodyArea() is module-local; panel children are placed in
+    // panel coordinates, so translate by the module position.
+    const auto bodyOf = [this] (vox::ui::VoxModule& module) {
+        auto body = module.bodyArea();
+        body.translate (module.getX(), module.getY());
+        return body;
+    };
     const auto band = central;
-    { auto central = band; // DESIGN
-        auto row = central.removeFromTop (30);
+    { auto area = band; // DESIGN
+        auto row = area.removeFromTop (30);
         sourceButton_.setBounds (row.removeFromLeft (150).reduced (2));
-        programCurvesButton_.setBounds (row.removeFromLeft (170).reduced (2));
-        auto locks = central.removeFromTop (28);
+        programCurvesButton_.setBounds (row.removeFromLeft (180).reduced (2));
+        auto locks = area.removeFromTop (28);
         for (std::size_t i = 0; i < layerLocks_.size(); ++i)
             layerLocks_[i].setBounds (locks.removeFromLeft (110).reduced (2));
-        central.removeFromTop (4);
-        const int width = central.getWidth() / 4;
+        area.removeFromTop (4);
+        designModule_.setBounds (area);
+        auto body = bodyOf (designModule_);
+        const int width = body.getWidth() / 4;
         for (std::size_t i = 0; i < layers_.size(); ++i) {
-            auto card = i + 1 == layers_.size() ? central : central.removeFromLeft (width);
-            layers_[i]->setBounds (card.reduced (4));
+            auto card = i + 1 == layers_.size() ? body : body.removeFromLeft (width);
+            layers_[i]->setBounds (card.reduced (3));
         }
     }
-    { auto central = band; // PERFORM
-        auto knobs = central.removeFromTop (150);
-        output_.setBounds (knobs.removeFromLeft (150).reduced (4));
-        duration_.setBounds (knobs.removeFromLeft (150).reduced (4));
-        knobs.removeFromLeft (8);
-        factory_.setBounds (knobs.removeFromLeft (220).reduced (4));
-        comparison_.setBounds (knobs.removeFromLeft (160).reduced (4));
-        auto sel1 = central.removeFromTop (34);
-        family_.setBounds (sel1.removeFromLeft (240).reduced (3));
-        eventBars_.setBounds (sel1.removeFromLeft (180).reduced (3));
-        auto sel2 = central.removeFromTop (34);
-        playMode_.setBounds (sel2.removeFromLeft (190).reduced (3));
-        triggerPolicy_.setBounds (sel2.removeFromLeft (190).reduced (3));
-        auto seedRow = central.removeFromTop (30);
-        generatorSettings_.setBounds (seedRow.removeFromRight (90).reduced (2));
-        seed_.setBounds (seedRow.reduced (2));
-        generate_.setBounds (central.removeFromTop (36).reduced (2));
-        mutate_.setBounds (central.removeFromTop (36).reduced (2));
-        auto auditionRow = central.removeFromTop (34);
-        audition_.setBounds (auditionRow.removeFromLeft (170).reduced (2));
-        stopAudition_.setBounds (auditionRow.removeFromLeft (110).reduced (2));
-        auto macroKnobsRow = central.removeFromTop (86);
-        const int knobWidth = macroKnobsRow.getWidth() / static_cast<int> (macroKnobs_.size());
+    { auto area = band; // PERFORM — Program Generator | Event Preview; Macros below
+        auto columns = area.removeFromTop (std::max (0, area.getHeight() - 152));
+        // Both modules fill their column: dense two-column grid per the
+        // reference (no vast empty lower workspace).
+        auto generatorCol = columns.removeFromLeft (columns.getWidth() * 55 / 100);
+        columns.removeFromLeft (10);
+        previewModule_.setBounds (columns);
+        generatorModule_.setBounds (generatorCol);
+        macrosModule_.setBounds (area.removeFromBottom (132).removeFromTop (132 - 10));
+
+        auto body = bodyOf (generatorModule_);
+        auto selects = body.removeFromTop (30);
+        family_.setBounds (selects.removeFromLeft (selects.getWidth() * 50 / 100).reduced (2));
+        selects.removeFromLeft (6);
+        generatorPanel().styleSelector().setBounds (selects.removeFromLeft (selects.getWidth() * 55 / 100).reduced (2));
+        selects.removeFromLeft (6);
+        generatorPanel().complexitySelector().setBounds (selects.reduced (2));
+        body.removeFromTop (6);
+        auto seedRow = body.removeFromTop (48); // 14 label strip + 32 controls + 2 pad
+        const auto seedLabels = seedRow.removeFromTop (14);
+        auto seedControls = seedRow;
+        auto seedArea = seedControls.removeFromLeft (seedControls.getWidth() * 44 / 100);
+        paintLabels_.push_back ({ seedArea.removeFromLeft (46), "SEED", 1 });
+        seed_.setBounds (seedArea.removeFromBottom (30).reduced (1, 3));
+        seedControls.removeFromLeft (8);
+        auto lengthArea = seedControls.removeFromLeft (seedControls.getWidth() * 40 / 100);
+        paintLabels_.push_back ({ lengthArea.removeFromLeft (62), "LENGTH", 1 });
+        eventBars_.setBounds (lengthArea.removeFromBottom (30).reduced (1, 3));
+        duration_.setBounds (seedControls.removeFromRight (104).removeFromBottom (34).reduced (0, 0));
+        body.removeFromTop (6);
+        auto recipes = body.removeFromTop (std::max (96, body.getHeight() - (4 + 26 + 26 + 4 + 34 + 18)));
+        const auto recipeWidth = recipes.getWidth() / 4;
+        for (int i = 0; i < 4; ++i) {
+            auto slot = i == 3 ? recipes : recipes.removeFromLeft (recipeWidth);
+            paintLabels_.push_back ({ slot.removeFromTop (14).reduced (i == 0 ? 34 : 2, 0),
+                std::array<juce::String,4> { "INTENSITY", "COMPLEXITY", "ENERGY", "STEREO MOTION" }[static_cast<std::size_t>(i)], 1 });
+            if (i == 0) generatorPanel().intensitySlider().setBounds (slot.removeFromTop (70).reduced (18, 0));
+            else if (i == 2) generatorPanel().energySlider().setBounds (slot.removeFromTop (70).reduced (18, 0));
+            else generatorPanel().stereoSlider().setBounds (slot.removeFromTop (70).reduced (18, 0));
+        }
+        body.removeFromTop (4);
+        auto locks = body.removeFromTop (26);
+        for (int i = 0; i < 6; ++i)
+            generatorPanel().fieldLock (static_cast<std::size_t> (i)).setBounds (locks.removeFromLeft (locks.getWidth() / 6).reduced (2));
+        auto locks2 = body.removeFromTop (26);
+        for (int i = 6; i < 12; ++i)
+            generatorPanel().fieldLock (static_cast<std::size_t> (i)).setBounds (locks2.removeFromLeft (locks2.getWidth() / 6).reduced (2));
+        body.removeFromTop (4);
+        auto actions = body.removeFromTop (34);
+        generate_.setBounds (actions.removeFromLeft (160).reduced (2));
+        mutate_.setBounds (actions.removeFromLeft (120).reduced (2));
+        actions.removeFromLeft (6);
+        generatorSettings_.setBounds (actions.removeFromLeft (110).reduced (2));
+        paintLabels_.push_back ({ actions.removeFromRight (actions.getWidth() - 396), u8("Creates editable Program data \u00b7 host automation unchanged"), 1 });
+
+        auto previewBody = bodyOf (previewModule_);
+        previewSummaryBounds_ = previewBody.removeFromTop (52);
+        previewName_.setBounds (previewSummaryBounds_.removeFromTop (30));
+        previewMeta_.setBounds (previewSummaryBounds_);
+        previewBody.removeFromTop (8);
+        paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "MODE / TRIGGER POLICY", 1 });
+        playMode_.setBounds (previewBody.removeFromTop (28).reduced (2));
+        previewBody.removeFromTop (4);
+        triggerPolicy_.setBounds (previewBody.removeFromTop (28).reduced (2));
+        previewBody.removeFromTop (8);
+        paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "LOAD SEED PROGRAM / COMPARE", 1 });
+        factory_.setBounds (previewBody.removeFromTop (30).reduced (2));
+        previewBody.removeFromTop (4);
+        comparison_.setBounds (previewBody.removeFromTop (30).reduced (2));
+        previewBody.removeFromTop (12);
+        auto previewActions = previewBody.removeFromBottom (34);
+        audition_.setBounds (previewActions.removeFromLeft (140).reduced (2));
+        stopAudition_.setBounds (previewActions.removeFromLeft (110).reduced (2));
+
+        auto macrosBody = bodyOf (macrosModule_);
+        auto well = macrosBody.removeFromBottom (110).reduced (10, 8); // grouped well
+        const int knobWidth = well.getWidth() / static_cast<int> (macroKnobs_.size());
         for (std::size_t i = 0; i < macroKnobs_.size(); ++i) {
-            auto slot = i + 1 == macroKnobs_.size()
-                            ? macroKnobsRow
-                            : macroKnobsRow.removeFromLeft (knobWidth);
-            macroKnobs_[i].setBounds (slot.reduced (3));
+            auto slot = i + 1 == macroKnobs_.size() ? well : well.removeFromLeft (knobWidth);
+            macroKnobs_[i].setBounds (slot.reduced (2));
         }
     }
-    { auto central = band; // TIMELINE
-        programCurves_.setBounds (central.reduced (4));
+    { auto area = band; // TIMELINE
+        timelineModule_.setBounds (area);
+        programCurves_.setBounds (bodyOf (timelineModule_));
     }
-    { auto central = band; // MOTION
-        macroLabelBounds_ = central.removeFromTop (16).reduced (4, 0);
-        auto macro = central.removeFromTop (34);
+    { auto area = band; // MOTION
+        auto routing = area.removeFromTop (82);
+        macroLabelBounds_ = routing.removeFromTop (14).reduced (4, 0);
+        auto macro = routing.removeFromTop (34);
         macroSelector_.setBounds (macro.removeFromLeft (74).reduced (2));
         macroDestination_.setBounds (macro.removeFromLeft (180).reduced (2));
         macroValue_.setBounds (macro.removeFromLeft (110).reduced (2));
         macroDepth_.setBounds (macro.reduced (2));
-        central.removeFromTop (4);
-        motionPanel_.setBounds (central.reduced (4));
+        routing.removeFromTop (4);
+        motionModule_.setBounds (routing);
+        motionPanel_.setBounds (bodyOf (motionModule_));
     }
-    { auto central = band; // PROCESS
-        fxLabelBounds_ = central.removeFromTop (16).reduced (4, 0);
-        auto fxRow = central.removeFromTop (130);
+    { auto area = band; // PROCESS
+        flowModule_.setBounds (area.removeFromTop (64));
+        flowTrackBounds_ = bodyOf (flowModule_);
+        area.removeFromTop (8);
+        auto slotsRow = area.removeFromTop (170);
+        slotsModule_.setBounds (slotsRow);
+        auto slotsBody = bodyOf (slotsModule_);
+        fxLabelBounds_ = slotsBody.removeFromTop (14);
+        auto fxRow = slotsBody.removeFromTop (120);
         const int fxWidth = fxRow.getWidth() / 4;
         for (std::size_t i = 0; i < 4; ++i) {
             auto column = i == 3 ? fxRow : fxRow.removeFromLeft (fxWidth);
@@ -1466,47 +1585,58 @@ void FxPanel::resized()
             effectsWet_[i].setBounds (column.removeFromLeft (column.getWidth() / 2));
             effectsAmount_[i].setBounds (column);
         }
-        fxTailStatus_.setBounds (central.removeFromTop (20).removeFromRight (240));
+        area.removeFromTop (8);
+        outputModule_.setBounds (area);
+        flowTrack_.setVisible (workspace_ == Workspace::process);
+        flowTrack_.setBounds (bodyOf (flowModule_));
+        auto outputBody = bodyOf (outputModule_);
+        output_.setBounds (outputBody.removeFromLeft (140).reduced (2));
+        fxTailStatus_.setBounds (outputBody.removeFromRight (260));
     }
-    { auto central = band; // TRIGGER / PATTERN
-        auto actions = central.removeFromTop (30);
+    { auto area = band; // TRIGGER
+        patternModule_.setBounds (area);
+        auto body = bodyOf (patternModule_);
+        auto actions = body.removeFromTop (30);
         patternActions_.setBounds (actions.removeFromLeft (110).reduced (2));
         patternSelector_.setBounds (actions.removeFromLeft (240).reduced (2));
         actions.removeFromLeft (8);
         patternEnabled_.setBounds (actions.removeFromLeft (180).reduced (2));
         patternStepSelector_.setBounds (actions.removeFromLeft (90).reduced (2));
-        auto details = central.removeFromTop (34);
+        auto details = body.removeFromTop (34);
         const int detailWidth = details.getWidth() / 4;
         for (std::size_t i = 0; i < patternDetails_.size(); ++i) {
-            auto area = i == 3 ? details : details.removeFromLeft (detailWidth);
-            patternDetails_[i].setBounds (area.reduced (2));
+            auto slot = i == 3 ? details : details.removeFromLeft (detailWidth);
+            patternDetails_[i].setBounds (slot.reduced (2));
         }
-        auto stepOpts = central.removeFromTop (34);
+        auto stepOpts = body.removeFromTop (34);
         patternLength_.setBounds (stepOpts.removeFromLeft (110).reduced (2));
         patternBar_.setBounds (stepOpts.removeFromLeft (100).reduced (2));
         patternGrid_.setBounds (stepOpts.removeFromLeft (100).reduced (2));
         patternPage_.setBounds (stepOpts.removeFromLeft (100).reduced (2));
         patternSwing_.setBounds (stepOpts.reduced (2));
-        auto stepRow = central.removeFromTop (54);
+        auto stepRow = body.removeFromTop (54);
         const int stepWidth = stepRow.getWidth() / 16;
         for (std::size_t i = 0; i < patternSteps_.size(); ++i) {
-            auto area = i == 15 ? stepRow : stepRow.removeFromLeft (stepWidth);
-            patternSteps_[i].setBounds (area.reduced (2));
+            auto slot = i == 15 ? stepRow : stepRow.removeFromLeft (stepWidth);
+            patternSteps_[i].setBounds (slot.reduced (2));
         }
-        auto exportRow = central.removeFromTop (34);
+        auto exportRow = body.removeFromTop (34);
         midiExport_.setBounds (exportRow.removeFromLeft (150).reduced (2));
     }
-    { auto central = band; // PRESETS
-        browser_.setBounds (central.reduced (4));
+    { auto area = band; // PRESETS
+        presetsModule_.setBounds (area);
+        browser_.setBounds (bodyOf (presetsModule_));
     }
-    { auto central = band; // ADVANCED
-        auto sampleRow = central.removeFromTop (34);
+    { auto area = band; // ADVANCED
+        advancedModule_.setBounds (area);
+        auto body = bodyOf (advancedModule_);
+        auto sampleRow = body.removeFromTop (34);
         sampleImport_.setBounds (sampleRow.removeFromLeft (130).reduced (2));
         sampleBuiltin_.setBounds (sampleRow.removeFromLeft (130).reduced (2));
         sampleStatus_.setBounds (sampleRow.reduced (2));
-        auto exportRow = central.removeFromTop (34);
+        auto exportRow = body.removeFromTop (34);
         wavExport_.setBounds (exportRow.removeFromLeft (130).reduced (2));
-        auto transfer = central.removeFromTop (34);
+        auto transfer = body.removeFromTop (34);
         dragGrip_.setBounds (transfer.removeFromRight (190).reduced (2));
         prepareMidiDrag_.setBounds (transfer.removeFromRight (180).reduced (2));
         dragWarning_.setBounds (transfer.reduced (4, 0));
@@ -1515,7 +1645,57 @@ void FxPanel::resized()
     generatorPanel_->setBounds (getLocalBounds().withSizeKeepingCentre (768, 372));
     sourcePanel_.setBounds (getLocalBounds().withSizeKeepingCentre (665, 301));
     wavOptions_.setBounds (getLocalBounds().withSizeKeepingCentre (470, 232));
+    syncModuleLabels();
 }
+void FxPanel::syncModuleLabels()
+{
+    for (auto& label : moduleLabels_) label.setVisible (false);
+    std::size_t used = 0;
+    for (const auto& entry : paintLabels_) {
+        if (used >= moduleLabels_.size()) break;
+        auto& label = moduleLabels_[used++];
+        label.setText (entry.text, juce::dontSendNotification);
+        label.setBounds (entry.bounds);
+        label.setVisible (static_cast<int> (workspace_) == entry.workspace);
+        label.toFront (false);
+    }
+    previewName_.setVisible (workspace_ == Workspace::perform);
+    previewMeta_.setVisible (workspace_ == Workspace::perform);
+    const auto family = family_.getSelectedId() > 0
+        ? family_.getItemText (family_.getSelectedId() - 1) : juce::String ("--");
+    previewName_.setText (family, juce::dontSendNotification);
+    previewMeta_.setText (playMode_.getItemText (juce::jmax (0, playMode_.getSelectedId() - 1)) + " / " +
+        triggerPolicy_.getItemText (juce::jmax (0, triggerPolicy_.getSelectedId() - 1)) +
+        u8("  \u00b7  Live DSP event engine"), juce::dontSendNotification);
+    flowTrack_.setVisible (workspace_ == Workspace::process);
+}
+void FxPanel::FlowTrack::paint (juce::Graphics& g)
+{
+    namespace c = vox::ui::tokens::colour;
+    namespace ty = vox::ui::typography;
+    auto track = getLocalBounds().reduced (2, 4);
+    auto chip = [&] (juce::String label, bool active) {
+        juce::GlyphArrangement glyphs;
+        glyphs.addLineOfText (ty::badge(), label, 0.0f, 0.0f);
+        const auto bounds = track.removeFromLeft (
+            static_cast<int> (glyphs.getBoundingBox (0, -1, true).getWidth()) + 20);
+        g.setColour (c::control);
+        g.fillRoundedRectangle (bounds.toFloat(), 5.0f);
+        g.setColour (active ? c::fx::accent.withAlpha (0.55f) : c::border);
+        g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 5.0f, 1.0f);
+        g.setColour (active ? c::fx::accent : c::textSecondary);
+        g.setFont (ty::badge());
+        g.drawText (label, bounds, juce::Justification::centred);
+        track.removeFromLeft (16);
+        g.setColour (c::textMuted);
+        g.drawText (">", track.removeFromLeft (12), juce::Justification::centred);
+    };
+    chip ("A-D SUM", false);
+    for (int i = 0; i < 4; ++i)
+        chip (slots[i], active[i]);
+    chip ("MASTER", false);
+}
+
 namespace {
 juce::String workspaceTitle (FxPanel::Workspace workspace)
 {
@@ -1552,6 +1732,9 @@ void FxPanel::setWorkspace (Workspace workspace)
 }
 void FxPanel::applyWorkspaceVisibility()
 {
+    // Fail-safe: hide everything first, then mark the live workspace's
+    // controls. Retired or not-yet-laid-out controls can never leak through.
+    for (auto* child : getChildren()) child->setVisible (false);
     const auto show = [this] (juce::Component& component, bool visible) { component.setVisible (visible); };
     const bool design = workspace_ == Workspace::design;
     const bool perform = workspace_ == Workspace::perform;
@@ -1567,22 +1750,37 @@ void FxPanel::applyWorkspaceVisibility()
     show (sourceButton_, design);
     show (programCurvesButton_, design);
     show (programCurves_, timeline);
-    // PERFORM: selection, mode, generator, audition, A/B, macro performance.
-    show (output_, perform); show (duration_, perform);
-    show (family_, perform); show (eventBars_, perform);
-    show (playMode_, perform); show (triggerPolicy_, perform);
+    // PERFORM: reference composition — Program Generator (category/style,
+    // seed/length, recipe dials, locks, generate), Event Preview (program
+    // select/A-B/audition), Performance Macros (8 host knobs).
+    show (generatorModule_, perform); show (previewModule_, perform);
+    show (macrosModule_, perform);
+    show (family_, perform);
+    show (generatorPanel().styleSelector(), perform);
+    show (seed_, perform); show (duration_, perform); show (eventBars_, perform);
+    show (generatorPanel().intensitySlider(), perform);
+    show (generatorPanel().complexitySelector(), perform);
+    show (generatorPanel().energySlider(), perform);
+    show (generatorPanel().stereoSlider(), perform);
+    for (std::size_t i = 0; i < 12; ++i) show (generatorPanel().fieldLock (i), perform);
+    show (generate_, perform); show (mutate_, perform); show (generatorSettings_, perform);
     show (factory_, perform); show (comparison_, perform);
-    show (seed_, perform); show (generatorSettings_, perform);
-    show (generate_, perform); show (mutate_, perform);
+    show (playMode_, perform); show (triggerPolicy_, perform);
     show (audition_, perform); show (stopAudition_, perform);
-    for(auto& knob : macroKnobs_) show (knob, perform);
+    for (auto& knob : macroKnobs_) show (knob, perform);
+    show (designModule_, design); show (timelineModule_, timeline);
     // Routing editor (assignment/readback) lives with Motion; the eight
     // performance knobs stay in PERFORM.
     show (macroSelector_, motion); show (macroDestination_, motion);
     show (macroValue_, motion); show (macroDepth_, motion);
     // MOTION / PROCESS / TRIGGER / PRESETS / ADVANCED. Motion and Presets
     // are real embedded workspace panels now (no single-button overlays).
+    show (motionModule_, motion);
     show (motionPanel_, motion);
+    show (flowModule_, process); show (slotsModule_, process); show (outputModule_, process);
+    show (output_, process);
+    show (patternModule_, trigger);
+    show (presetsModule_, presets);
     show (browser_, presets);
     if (workspace_ == Workspace::motion) motionPanel_.refresh();
     if (workspace_ == Workspace::presets) browser_.open();
@@ -1600,6 +1798,7 @@ void FxPanel::applyWorkspaceVisibility()
     show (patternGrid_, trigger); show (patternPage_, trigger);
     for (auto& step : patternSteps_) show (step, trigger);
     show (midiExport_, trigger);
+    show (advancedModule_, advanced);
     show (sampleImport_, advanced); show (sampleBuiltin_, advanced);
     show (sampleStatus_, advanced);
     show (wavExport_, advanced);
@@ -1607,10 +1806,11 @@ void FxPanel::applyWorkspaceVisibility()
     show (dragWarning_, advanced);
     // Always visible: chrome, keyboard, panic, clock and overlays themselves.
     show (workspaceTabs_, true);
-    show (workspaceHeader_, true);
+    show (workspaceHeader_, false); // identity is painted in the chrome row
     show (panic_, true);
     show (clockStatus_, true);
     show (keyboard_, true);
+    syncModuleLabels();
 }
 void FxPanel::focusLost (juce::Component::FocusChangeType)
 {
@@ -1913,6 +2113,19 @@ void FxPanel::timerCallback()
     if (!isShowing()) return;
     keyboard_.setExternalNotes(processor_.hostNoteMask());
     keyboard_.setEventMode(processor_.program().mode==PlayMode::oneShot);
+    for (std::size_t i = 0; i < 4; ++i) {
+        flowTrack_.active[i] = effectsType_[i].getSelectedId() > 1;
+        flowTrack_.slots[i] = juce::String ("0") + juce::String (static_cast<int> (i + 1)) + " " +
+            effectsType_[i].getItemText (juce::jmax (0, effectsType_[i].getSelectedId() - 1));
+    }
+    if (workspace_ == Workspace::perform) {
+        const auto family = family_.getSelectedId() > 0
+            ? family_.getItemText (family_.getSelectedId() - 1) : juce::String ("--");
+        previewName_.setText (family, juce::dontSendNotification);
+        previewMeta_.setText (playMode_.getItemText (juce::jmax (0, playMode_.getSelectedId() - 1)) + " / " +
+            triggerPolicy_.getItemText (juce::jmax (0, triggerPolicy_.getSelectedId() - 1)) +
+            u8("  \u00b7  Live DSP event engine"), juce::dontSendNotification);
+    }
     const auto sample=processor_.sampleSnapshot();
     using Status=sample::Controller::Status;
     const char* text=sample.status==Status::builtin?"Built-in":sample.status==Status::loading?"Loading":

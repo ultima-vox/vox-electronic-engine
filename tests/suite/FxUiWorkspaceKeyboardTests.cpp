@@ -47,13 +47,29 @@ void checkWorkspaceNonOverlap()
     {
         panel.setWorkspace (static_cast<W> (w));
         const auto controls = visibleControls();
+        // Containment is not overlap (module chrome hosts its controls);
+        // partial intersections are.
+        const auto contains = [] (const juce::Rectangle<int>& outer, const juce::Rectangle<int>& inner) {
+            return outer.contains (inner);
+        };
         int overlaps = 0;
         for (std::size_t i = 0; i < controls.size(); ++i)
             for (std::size_t j = i + 1; j < controls.size(); ++j)
-                if (controls[i].first.intersects (controls[j].first)) ++overlaps;
+                if (controls[i].first.intersects (controls[j].first)
+                    && !contains (controls[i].first, controls[j].first)
+                    && !contains (controls[j].first, controls[i].first)) {
+                    if (overlaps == 0) {
+                        auto ci = static_cast<juce::Component*> (const_cast<void*> (controls[i].second));
+                        auto cj = static_cast<juce::Component*> (const_cast<void*> (controls[j].second));
+                        std::printf ("overlap: [%s] '%s' x [%s] '%s'\n",
+                                     typeid (*ci).name(), ci->getTitle().toRawUTF8(),
+                                     typeid (*cj).name(), cj->getTitle().toRawUTF8());
+                    }
+                    ++overlaps;
+                }
         check (overlaps == 0, "workspace visible controls do not overlap at 1040 px");
         // Chrome and keyboard must never intrude into the workspace band.
-        check (panel.workspaceTabs().getBottom() <= 44,
+        check (panel.workspaceTabs().getBottom() <= 92,
                "tab strip stays in the chrome row");
     }
 }
@@ -69,8 +85,7 @@ void checkWorkspaceMatrix()
     panel.setSize (1040, 700);
 
     check (panel.workspace() == W::perform, "default workspace is PERFORM");
-    check (panel.outputSlider().isVisible() && !panel.layerPanel (0).isVisible(),
-           "PERFORM shows output controls and hides layer cards");
+    check (!panel.layerPanel (0).isVisible(), "PERFORM hides layer cards");
     check (panel.macroKnob (0).isVisible() && panel.macroKnob (7).isVisible(),
            "PERFORM exposes all eight macro knobs");
     check (panel.keyboard().isVisible() && panel.workspaceTabs().isVisible(),
@@ -100,6 +115,7 @@ void checkWorkspaceMatrix()
     panel.setWorkspace (W::process);
     check (panel.effectSelector (0).isVisible() && !panel.effectWet (0).isVisible() == false,
            "PROCESS shows FX slot controls");
+    check (panel.outputSlider().isVisible(), "PROCESS owns the output knob (Output & Tails)");
 
     panel.setWorkspace (W::trigger);
     check (panel.patternStep (0).isVisible() && panel.patternSwingSlider().isVisible(),
@@ -127,7 +143,7 @@ void checkWorkspaceMatrix()
         const auto tabs = chrome.workspaceTabs().getBounds();
         const auto meter = chrome.getBounds().getTopLeft();
         check (tabs.getWidth() >= 480, "eight tabs keep >=480 px at 1040 width");
-        check (tabs.getBottom() <= 44, "tabs occupy the first chrome row only");
+        check (tabs.getBottom() <= 92, "tabs stay inside the two-row chrome band");
         (void) meter;
     }
 
@@ -315,7 +331,7 @@ void checkKeyboardOwnershipAndVisual()
     }
     // E4 is the third white key (white index 2).
     const auto pulsePixel = pulseFrame.getPixelAt (static_cast<int> (176.0 + whiteW * 2.5), 60);
-    check (pulsePixel == tokens::colour::accentHover,
+    check (pulsePixel == tokens::colour::accent,
            "event flash paints the accent highlight on the key");
     keyboard.mouseDown (mouseEvent (keyboard, whiteX (2), 100.f, true, false));
     keyboard.mouseUp (mouseEvent (keyboard, whiteX (2), 100.f, false, true));
@@ -351,7 +367,7 @@ void checkKeyboardOwnershipAndVisual()
     // column; sample inside both at y=30 (within the black key's height).
     const auto sampleX = static_cast<int> (176.0 + whiteW * 1.15);
     const auto blackPixel = frame.getPixelAt (sampleX, 30);
-    check (blackPixel == tokens::colour::control,
+    check (blackPixel == tokens::colour::panelRaised,
            "black key overlap column is painted above the white keys");
 
     // Accessible labelling (screen-reader title/description present).

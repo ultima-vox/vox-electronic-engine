@@ -11,7 +11,8 @@ target_sources(vox_ui PRIVATE
   components/VoxComboBox.cpp components/VoxComboBox.h
   components/VoxTabBar.cpp components/VoxTabBar.h
   components/VoxSectionHeader.cpp components/VoxSectionHeader.h
-  components/VoxKeyboard.cpp components/VoxKeyboard.h)
+  components/VoxKeyboard.cpp components/VoxKeyboard.h
+  components/VoxModule.cpp components/VoxModule.h)
 
 target_include_directories(vox_ui PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}

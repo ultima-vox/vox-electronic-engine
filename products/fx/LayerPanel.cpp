@@ -5,6 +5,7 @@
 
 namespace vox::fx {
 LayerPanel::LayerPanel(FxProcessor& processor, int index) : processor_(processor), index_(index), curve_(processor,static_cast<std::size_t>(index)) {
+    setInterceptsMouseClicks(false, true);
     enabled_.setClickingTogglesState(true);
     enabled_.setTitle("Enable layer " + juce::String(index + 1));
     enabled_.onClick = [this] { processor_.editLayer(static_cast<std::size_t>(index_), [this](NoiseLayer& l){ l.enabled=enabled_.getToggleState(); }); };
@@ -73,16 +74,26 @@ void LayerPanel::refresh(const NoiseLayer& layer) {
     curve_.refresh();
 }
 void LayerPanel::paint(juce::Graphics& g) {
-    namespace c=vox::ui::tokens::colour;
-    auto bounds=getLocalBounds().toFloat().reduced(1.0f);
-    g.setColour(c::panelRaised);g.fillRoundedRectangle(bounds,6.0f);
-    g.setColour(c::border);g.drawRoundedRectangle(bounds,6.0f,1.0f);
-    g.setColour(c::text);g.setFont(vox::ui::typography::controlLabel());
-    g.drawText("LAYER " + juce::String::charToString(static_cast<juce::juce_wchar>('A'+index_)),getLocalBounds().reduced(10).removeFromTop(24),juce::Justification::centredLeft);
+    namespace c = vox::ui::tokens::colour;
+    namespace r = vox::ui::tokens::radius;
+    const auto bounds = getLocalBounds().toFloat();
+    g.setColour(c::panel);
+    g.fillRoundedRectangle(bounds, r::panel);
+    g.setColour(c::border);g.drawRoundedRectangle(bounds.reduced(0.5f), r::panel, 1.0f);
+    // Module header: layer title + IN PROGRAM/INACTIVE badge, controls right.
+    auto header = getLocalBounds().removeFromTop(30).reduced(10, 0);
+    g.setColour(c::text);g.setFont(vox::ui::typography::moduleTitle());
+    g.drawText("LAYER " + juce::String::charToString(static_cast<juce::juce_wchar>('A'+index_)),header.removeFromLeft(86),juce::Justification::centredLeft);
+    const bool active=enabled_.getToggleState();
+    const auto badge=header.removeFromLeft(84).removeFromTop(18).translated(0,4);
+    g.setColour(c::control);g.fillRoundedRectangle(badge.toFloat(),5.0f);
+    g.setColour(active?c::fx::accent.withAlpha(0.55f):c::border);g.drawRoundedRectangle(badge.toFloat().reduced(0.5f),5.0f,1.0f);
+    g.setColour(active?c::fx::accent:c::textSecondary);g.setFont(vox::ui::typography::badge());
+    g.drawText(active?"IN PROGRAM":"INACTIVE",badge,juce::Justification::centred);
 }
 void LayerPanel::resized() {
     auto area=getLocalBounds().reduced(10);
-    auto header=area.removeFromTop(25);enabled_.setBounds(header.removeFromRight(48));
+    auto header=area.removeFromTop(34);enabled_.setBounds(header.removeFromRight(48));
     solo_.setBounds(header.removeFromRight(48).reduced(1,0));
     editSource_.setBounds(header.removeFromRight(62).reduced(1,0));
     area.removeFromTop(4);family_.setBounds(area.removeFromTop(30));area.removeFromTop(8);
