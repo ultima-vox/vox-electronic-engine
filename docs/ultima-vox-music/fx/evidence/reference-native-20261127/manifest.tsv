@@ -1,0 +1,5 @@
+capture_method	reference = real headless Chromium 158 (@sparticuz/chromium + puppeteer-core), page = pinned e420d2c0 prototype served locally (github.io egress blocked in sandbox; deployment record: deployments API shows github-pages @ e420d2c0 success 2026-11-18). Viewport 1440x900, deviceScaleFactor 1.0, zone tabs clicked in-page.
+source_verification	Zones.tsx / FxPrototype.tsx / fx.css of origin/main vs pr/160 e420d2c0: not verbatim-identical filewise, but the FX prototype source under pr/160 IS the pinned reference; capture used pr/160 sources (e420d2c0) verbatim.
+native	rendered by tests/suite/fx_ui_render_harness (commit 27bff1d) offscreen, 1440x900, dpi scale 1.00, all 8 workspaces.
+workspaces	ws0 DESIGN, ws1 PERFORM, ws2 TIMELINE, ws3 MOTION, ws4 PROCESS, ws5 TRIGGER, ws6 PRESETS, ws7 ADVANCED
+ref_zones	reference/{perform,design,timeline,motion,process,trigger,presets,advanced}.png (same order)
