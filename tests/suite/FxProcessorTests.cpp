@@ -1727,9 +1727,9 @@ int main() {
         auto& settingsPanel=panel.generatorPanel();
         settingsPanel.styleSelector().setSelectedId(4,juce::sendNotificationSync);
         settingsPanel.complexitySelector().setSelectedId(2,juce::sendNotificationSync);
-        settingsPanel.intensitySlider().setValue(.2,juce::sendNotificationSync);
-        settingsPanel.energySlider().setValue(.4,juce::sendNotificationSync);
-        settingsPanel.stereoSlider().setValue(.8,juce::sendNotificationSync);
+        settingsPanel.intensitySlider().getSlider().setValue(.2,juce::sendNotificationSync);
+        settingsPanel.energySlider().getSlider().setValue(.4,juce::sendNotificationSync);
+        settingsPanel.stereoSlider().getSlider().setValue(.8,juce::sendNotificationSync);
         const auto controls=generated->generatorState();
         check(controls.style==3&&controls.complexity==2&&std::abs(controls.intensity-.2f)<1e-5f&&
               std::abs(controls.energy-.4f)<1e-5f&&std::abs(controls.stereo-.8f)<1e-5f,"generator settings UI binds controller");

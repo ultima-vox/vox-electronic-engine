@@ -132,7 +132,7 @@ void VoxKnob::paint (juce::Graphics& g)
                                       juce::jmin (endAngle, angle + modulationAmount * angleRange),
                                       true);
         }
-        g.setColour (tokens::colour::accentHover.withAlpha (enabled ? 0.55f : 0.22f));
+        g.setColour (tokens::colour::themeAccentHover.withAlpha (enabled ? 0.55f : 0.22f));
         g.strokePath (modulation, juce::PathStrokeType (strokeW * 0.55f,
                                                         juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
@@ -141,7 +141,7 @@ void VoxKnob::paint (juce::Graphics& g)
     juce::Path active;
     active.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
                           startAngle, angle, true);
-    g.setColour (enabled ? tokens::colour::accent : tokens::colour::textMuted);
+    g.setColour (enabled ? tokens::colour::themeAccent : tokens::colour::textMuted);
     g.strokePath (active, juce::PathStrokeType (strokeW,
                                                 juce::PathStrokeType::curved,
                                                 juce::PathStrokeType::rounded));

@@ -31,7 +31,7 @@ constexpr const char* familyControlNames[12][3]{
 GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     const char* names[]{"Style seed", "Active layers", "Intensity", "Energy", "Stereo", "Sound role"};
     for(std::size_t i=0;i<labels_.size();++i){labels_[i].setText(names[i],juce::dontSendNotification);addAndMakeVisible(labels_[i]);}
-    for(int i=0;i<6;++i)style_.addItem("Style " + juce::String(i+1),i+1);
+    for(int i=0;i<6;++i)style_.addItem(std::array<const char*,6>{"Psy Goa","Techno","Progressive","Ambient","Cinematic","Experimental"}[i],i+1);
     const char* roles[]{"Impact","Riser","Fall","Sweep","Zap","Rhythm","Atmosphere","Stinger"};
     for(int i=0;i<8;++i)role_.addItem(roles[i],i+1);
     role_.onChange=[this]{const auto id=role_.getSelectedId();if(id>0)(void)processor_.editGeneratorState([id](auto& state){state.role=static_cast<unsigned>(id-1);});};
@@ -47,21 +47,23 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
         graphStatus_.setText(applied?u8("Sound graph updated · host values unchanged"):"No structural change (check locks / seed)",juce::dontSendNotification);};
     fullGenerate_.onClick=[doSound]{doSound(false);};fullMutate_.onClick=[doSound]{doSound(true);};
     for(auto* c:std::array<juce::Component*,5>{&graphLock_,&lockGroup_,&fullGenerate_,&fullMutate_,&graphStatus_})addAndMakeVisible(*c);
-    for(int i=1;i<=4;++i)complexity_.addItem(juce::String(i),i);
+    complexity_.addItem("1 layer",1);complexity_.addItem("2 layers",2);
+    complexity_.addItem("3 layers",3);complexity_.addItem("4 layers",4);
     style_.setTitle("Generator style seed");complexity_.setTitle("Generator active layers");
     style_.onChange=[this]{const auto value=style_.getSelectedId()-1;
         (void)processor_.editGeneratorState([value](generator::ControllerState& s){s.style=value;});};
     complexity_.onChange=[this]{const auto value=complexity_.getSelectedId();
         (void)processor_.editGeneratorState([value](generator::ControllerState& s){s.complexity=value;});};
-    auto configure=[this](juce::Slider& slider,const char* title){slider.setRange(0,1,.01);
-        slider.setTitle(title);slider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
-        slider.setTextBoxStyle(juce::Slider::TextBoxBelow,false,54,13);};
-    configure(intensity_,"Generator intensity");configure(energy_,"Generator energy");configure(stereo_,"Generator stereo spread");
-    intensity_.onValueChange=[this]{const auto v=static_cast<float>(intensity_.getValue());
+    for (auto* dial : { &intensity_, &energy_, &stereo_ }) dial->getSlider().setRange (0, 1, .01);
+    { const auto state=processor_.generatorState();
+      intensity_.getSlider().setValue(state.intensity,juce::dontSendNotification);
+      energy_.getSlider().setValue(state.energy,juce::dontSendNotification);
+      stereo_.getSlider().setValue(state.stereo,juce::dontSendNotification); }
+    intensity_.getSlider().onValueChange=[this]{const auto v=static_cast<float>(intensity_.getSlider().getValue());
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.intensity=v;});};
-    energy_.onValueChange=[this]{const auto v=static_cast<float>(energy_.getValue());
+    energy_.getSlider().onValueChange=[this]{const auto v=static_cast<float>(energy_.getSlider().getValue());
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.energy=v;});};
-    stereo_.onValueChange=[this]{const auto v=static_cast<float>(stereo_.getValue());
+    stereo_.getSlider().onValueChange=[this]{const auto v=static_cast<float>(stereo_.getSlider().getValue());
         (void)processor_.editGeneratorState([v](generator::ControllerState& s){s.stereo=v;});};
     // style_/complexity_/intensity_/energy_/stereo_ and fieldLocks_ are
     // re-parented into the PERFORM Program-Generator module (reference
@@ -90,8 +92,11 @@ void GeneratorPanel::paint(juce::Graphics& g) {
 void GeneratorPanel::resized() {
     auto area=getLocalBounds().reduced(10);close_.setBounds(area.removeFromBottom(26).removeFromRight(75));
     for(std::size_t i=0;i<labels_.size();++i){auto row=area.removeFromTop(31);labels_[i].setBounds(row.removeFromLeft(100));
-        switch(i){case 0:style_.setBounds(row);break;case 1:complexity_.setBounds(row);break;
-            case 2:intensity_.setBounds(row);break;case 3:energy_.setBounds(row);break;case 4:stereo_.setBounds(row);break;case 5:role_.setBounds(row);break;default:break;}}
+        // style_/complexity_/intensity_/energy_/stereo_ live in the PERFORM
+        // Program-Generator module now; the overlay must not re-position them.
+        switch(i){case 0:if(style_.getParentComponent()==this)style_.setBounds(row);break;
+            case 1:if(complexity_.getParentComponent()==this)complexity_.setBounds(row);break;
+            case 5:role_.setBounds(row);break;default:break;}}
     auto locks=area.removeFromTop(27);lockLayer_.setBounds(locks.removeFromLeft(100));
     const auto width=locks.getWidth()/4;for(std::size_t i=0;i<4;++i)fieldLocks_[i].setBounds(locks.removeFromLeft(width));
     auto second=area.removeFromTop(27);second.removeFromLeft(100);
@@ -107,7 +112,8 @@ void GeneratorPanel::timerCallback() {
     role_.setSelectedId(static_cast<int>(state.role)+1,juce::dontSendNotification);
     const int group=graphLock_.getSelectedId();if(group>=1&&group<=11)
         lockGroup_.setToggleState((state.graphLocks&(1u<<(group-1)))!=0,juce::dontSendNotification);
-    auto sync=[](juce::Slider& slider,float value){if(!slider.isMouseButtonDown()&&!slider.hasKeyboardFocus(true))slider.setValue(value,juce::dontSendNotification);};
+    auto sync=[](vox::ui::VoxKnob& dial,float value){auto& slider=dial.getSlider();
+        if(!slider.isMouseButtonDown()&&!slider.hasKeyboardFocus(true))slider.setValue(value,juce::dontSendNotification);};
     sync(intensity_,state.intensity);sync(energy_,state.energy);sync(stereo_,state.stereo);
     const int layer=lockLayer_.getSelectedId()-1;
     if(layer>=0&&layer<4){const auto mask=state.locks.layers[static_cast<std::size_t>(layer)];
@@ -550,7 +556,7 @@ template <typename Edit> void SourcePanel::editLayer(Edit edit){
 void SourcePanel::editKey(){
     const int root=root_.getSelectedId()-1,scale=scale_.getSelectedId()-1;
     if(root>=0&&root<12&&scale>=0&&scale<5)
-        (void)processor_.editTonalityIfRevision({static_cast<source::Scale>(scale),static_cast<std::uint8_t>(root)},revision_);
+        (void)processor_.editTonality({static_cast<source::Scale>(scale),static_cast<std::uint8_t>(root)});
     refresh();
 }
 void SourcePanel::refresh(){
@@ -629,7 +635,11 @@ void SourcePanel::paint(juce::Graphics& g){
 void SourcePanel::resized(){
     auto a=getLocalBounds().reduced(14);a.removeFromTop(21);
     auto first=a.removeFromTop(32);
-    layer_.setBounds(first.removeFromLeft(142).reduced(2));root_.setBounds(first.removeFromLeft(78).reduced(2));scale_.setBounds(first.removeFromLeft(145).reduced(2));
+    layer_.setBounds(first.removeFromLeft(142).reduced(2));
+    // root_ lives in the PERFORM Program-Generator selects row (reference
+    // PITCH KEY); the source overlay must not re-position it.
+    if(root_.getParentComponent()==this)root_.setBounds(first.removeFromLeft(78).reduced(2));else first.removeFromLeft(78);
+    scale_.setBounds(first.removeFromLeft(145).reduced(2));
     auto voice=a.removeFromTop(36);
     transpose_.setBounds(voice.removeFromLeft(248).reduced(2));
     characterLabel_.setBounds(voice.removeFromLeft(108).reduced(2));character_.setBounds(voice.reduced(2));
@@ -950,7 +960,8 @@ void FxPanel::patternCommand(int id){
 }
 FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     : processor_ (processor),savePicker_(std::move(picker)),externalDrag_(std::move(drag)), attachment_ (processor.outputParameter(), output_.getSlider()),
-      durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor), sourcePanel_(processor), motionPanel_(processor), browser_(processor)
+      durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor), sourcePanel_(processor), motionPanel_(processor), browser_(processor),
+      eventChart_ (processor)
 {
     addAndMakeVisible (output_);
     addAndMakeVisible (duration_);
@@ -1207,8 +1218,8 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     for(int i=1;i<=3;++i)patternPage_.addItem("Page "+juce::String(i),i);
     patternPage_.setTitle("Step page within bar");patternPage_.setSelectedId(1,juce::dontSendNotification);
     patternPage_.onChange=[this]{refreshPattern();};
-    patternSwing_.setRange(0,1,.01);patternSwing_.setSliderStyle(juce::Slider::LinearHorizontal);
-    patternSwing_.setTextBoxStyle(juce::Slider::TextBoxLeft,false,40,20);
+    patternSwing_.setRange(0,1,.01);patternSwing_.setSliderStyle(juce::Slider::LinearBar);
+    patternSwing_.setTextBoxStyle(juce::Slider::NoTextBox,false,0,0);
     patternSwing_.setTitle("Pattern swing");patternSwing_.setTooltip("Delay odd steps up to half their grid interval");
     patternSwing_.onStructuralChange=[this]{const float swing=static_cast<float>(patternSwing_.getValue());
         editPattern([swing](pattern::Pattern& p){p.swing=swing;});};
@@ -1222,7 +1233,7 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     const char* suffixes[]{" N"," V"," %"," x"};
     for(std::size_t i=0;i<patternDetails_.size();++i){auto& slider=patternDetails_[i];
         slider.setRange(i==0||i==2?0:1,i==0?127:i==1?127:i==2?100:4,1);
-        slider.setSliderStyle(juce::Slider::LinearHorizontal);slider.setTextBoxStyle(juce::Slider::TextBoxBelow,false,48,20);
+        slider.setSliderStyle(juce::Slider::LinearBar);slider.setTextBoxStyle(juce::Slider::NoTextBox,false,0,0);
         slider.setTextValueSuffix(suffixes[i]);slider.setTitle(detailNames[i]);slider.setTooltip(detailNames[i]);
         slider.onStructuralChange=[this,i] {const int bar=patternBar_.getSelectedId(),step=patternStepSelector_.getSelectedId(),page=patternPage_.getSelectedId();
             const int value=static_cast<int>(patternDetails_[i].getValue());
@@ -1313,12 +1324,28 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     previewMeta_.setFont(vox::ui::typography::mono(10.0f));
     flowTrack_.setInterceptsMouseClicks(false,false);
     addChildComponent(flowTrack_);
+    programEyebrow_.setText("PROGRAM", juce::dontSendNotification);
+    programEyebrow_.setColour(juce::Label::textColourId, vox::ui::tokens::colour::textMuted);
+    programEyebrow_.setFont(vox::ui::typography::eyebrow());
+    programEyebrow_.setJustificationType(juce::Justification::centredRight);
+    programName_.setFont(vox::ui::typography::sectionTitle());
+    programName_.setJustificationType(juce::Justification::centredRight);
+    for (auto* label : { &programEyebrow_, &programName_ }) {
+        label->setInterceptsMouseClicks(false,false);
+        addAndMakeVisible(*label);
+    }
+    eventChart_.setInterceptsMouseClicks(false,false);
+    addChildComponent(eventChart_);
+    // The FX product selects the mint FX accent (reference [data-theme=fx]);
+    // every shared component paints through the theme references.
+    vox::ui::tokens::colour::selectFxTheme();
+    keyboard_.setAccent (vox::ui::tokens::colour::fx::accent);
     // Recipe controls re-parented into the PERFORM Program-Generator module.
     generatorPanel().styleSelector().setSelectedId (processor_.generatorState().style + 1, juce::dontSendNotification);
     generatorPanel().complexitySelector().setSelectedId (processor_.generatorState().complexity, juce::dontSendNotification);
     // (reference composition). They are GeneratorPanel members; the panel
     // owns them visually now, the overlay keeps its own controls.
-    for (auto* control : std::array<juce::Component*,17>{
+    for (auto* control : std::array<juce::Component*,18>{
              &generatorPanel().styleSelector(), &generatorPanel().complexitySelector(),
              &generatorPanel().intensitySlider(), &generatorPanel().energySlider(),
              &generatorPanel().stereoSlider(),
@@ -1327,11 +1354,15 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
              &generatorPanel().fieldLock(4), &generatorPanel().fieldLock(5),
              &generatorPanel().fieldLock(6), &generatorPanel().fieldLock(7),
              &generatorPanel().fieldLock(8), &generatorPanel().fieldLock(9),
-             &generatorPanel().fieldLock(10), &generatorPanel().fieldLock(11) })
+             &generatorPanel().fieldLock(10), &generatorPanel().fieldLock(11),
+             &sourcePanel_.rootSelector() })
         addChildComponent (control);
+    // Recipe dials are VoxKnobs constructed Small (reference dial size).
     // Eight visible macro knobs bound to the real host macro parameters.
     for(std::size_t i=0;i<macroKnobs_.size();++i){
-        const auto name=juce::String("M")+juce::String(static_cast<int>(i+1));
+        const auto macroNames=std::array<juce::String,8> { "Intensity", "Motion", "Brightness",
+            "Space", "Texture", "Length", "Impact", "Width" }; // reference M1..M8 captions
+        const auto name=juce::String("M")+juce::String(static_cast<int>(i+1))+u8(" \u00b7 ")+macroNames[i];
         macroKnobs_[i].setLabel(name);
         macroKnobs_[i].setTooltip(name+u8(" — host-automatable macro value with automation readback"));
         macroKnobs_[i].getSlider().setTitle(name);
@@ -1434,11 +1465,14 @@ void FxPanel::resized()
     top.removeFromRight (8);
     clockStatus_.setBounds (top.removeFromRight (150).reduced (4, 0));
     meterBounds_ = top.removeFromRight (250).reduced (2);
-    // Chrome row 2: zone tabs (reference fx-nav) + workspace header text.
+    top.removeFromRight (10);
+    // Reference header right side: PROGRAM eyebrow + strong program name.
+    auto programArea = top.removeFromRight (200);
+    programEyebrow_.setBounds (programArea.removeFromTop (14));
+    programName_.setBounds (programArea);
+    // Chrome row 2: zone tabs (reference fx-nav) span the content width.
     auto tabsRow = bounds.removeFromTop (38).reduced (16, 2);
-    workspaceTabs_.setBounds (tabsRow.removeFromLeft (juce::jmax (520, tabsRow.getWidth() * 3 / 5)));
-    tabsRow.removeFromLeft (8);
-    clockStatus_.setBounds (tabsRow.removeFromRight (150).reduced (4, 0));
+    workspaceTabs_.setBounds (tabsRow);
     // Persistent native performance keyboard along the bottom (owner request).
     keyboard_.setBounds (bounds.removeFromBottom (118).reduced (16, 8));
     // Central workspace band composed of reference modules.
@@ -1446,6 +1480,7 @@ void FxPanel::resized()
     macroLabelBounds_ = {}; fxLabelBounds_ = {};
     previewSummaryBounds_ = {}; flowTrackBounds_ = {};
     paintLabels_.clear();
+    generatorModule_.clearWells();
     // VoxModule::bodyArea() is module-local; panel children are placed in
     // panel coordinates, so translate by the module position.
     const auto bodyOf = [this] (vox::ui::VoxModule& module) {
@@ -1481,12 +1516,15 @@ void FxPanel::resized()
         macrosModule_.setBounds (area.removeFromBottom (132).removeFromTop (132 - 10));
 
         auto body = bodyOf (generatorModule_);
-        auto selects = body.removeFromTop (30);
-        family_.setBounds (selects.removeFromLeft (selects.getWidth() * 50 / 100).reduced (2));
-        selects.removeFromLeft (6);
-        generatorPanel().styleSelector().setBounds (selects.removeFromLeft (selects.getWidth() * 55 / 100).reduced (2));
-        selects.removeFromLeft (6);
-        generatorPanel().complexitySelector().setBounds (selects.reduced (2));
+        auto selectsBody = body.removeFromTop (46);
+        auto selectsLabels = selectsBody.removeFromTop (14);
+        const auto selectWidth = selectsBody.getWidth() / 3;
+        for (int i = 0; i < 3; ++i)
+            paintLabels_.push_back ({ selectsLabels.removeFromLeft (selectWidth).reduced (2, 0),
+                std::array<juce::String,3> { "CATEGORY", "STYLE", "PITCH KEY" }[static_cast<std::size_t>(i)], 1 });
+        family_.setBounds (selectsBody.removeFromLeft (selectWidth).reduced (2, 0));
+        generatorPanel().styleSelector().setBounds (selectsBody.removeFromLeft (selectWidth).reduced (2, 0));
+        sourcePanel_.rootSelector().setBounds (selectsBody.reduced (2, 0));
         body.removeFromTop (6);
         auto seedRow = body.removeFromTop (48); // 14 label strip + 32 controls + 2 pad
         const auto seedLabels = seedRow.removeFromTop (14);
@@ -1500,21 +1538,27 @@ void FxPanel::resized()
         eventBars_.setBounds (lengthArea.removeFromBottom (30).reduced (1, 3));
         duration_.setBounds (seedControls.removeFromRight (104).removeFromBottom (34).reduced (0, 0));
         body.removeFromTop (6);
-        auto recipes = body.removeFromTop (std::max (96, body.getHeight() - (4 + 26 + 26 + 4 + 34 + 18)));
+        auto recipes = body.removeFromTop (std::max (96, body.getHeight() - (4 + 14 + 2 + 26 + 26 + 4 + 34 + 18)));
+        generatorModule_.addWell (recipes.translated (-generatorModule_.getX(), -generatorModule_.getY())
+                                              .reduced (0, 2));
         const auto recipeWidth = recipes.getWidth() / 4;
         for (int i = 0; i < 4; ++i) {
             auto slot = i == 3 ? recipes : recipes.removeFromLeft (recipeWidth);
-            paintLabels_.push_back ({ slot.removeFromTop (14).reduced (i == 0 ? 34 : 2, 0),
-                std::array<juce::String,4> { "INTENSITY", "COMPLEXITY", "ENERGY", "STEREO MOTION" }[static_cast<std::size_t>(i)], 1 });
-            if (i == 0) generatorPanel().intensitySlider().setBounds (slot.removeFromTop (70).reduced (18, 0));
-            else if (i == 2) generatorPanel().energySlider().setBounds (slot.removeFromTop (70).reduced (18, 0));
-            else generatorPanel().stereoSlider().setBounds (slot.removeFromTop (70).reduced (18, 0));
+            if (i == 1) paintLabels_.push_back ({ slot.removeFromTop (14).reduced (2, 0), "COMPLEXITY", 1 });
+            else slot.removeFromTop (14); // VoxKnob paints its own dial label
+            if (i == 1) generatorPanel().complexitySelector().setBounds (slot.removeFromTop (34).reduced (10, 3));
+            else if (i == 0) generatorPanel().intensitySlider().setBounds (slot.removeFromTop (70).reduced (14, 0));
+            else if (i == 2) generatorPanel().energySlider().setBounds (slot.removeFromTop (70).reduced (14, 0));
+            else generatorPanel().stereoSlider().setBounds (slot.removeFromTop (70).reduced (14, 0));
         }
         body.removeFromTop (4);
-        auto locks = body.removeFromTop (26);
+        auto locksBody = body.removeFromTop (14 + 2 + 26 + 26);
+        paintLabels_.push_back ({ locksBody.removeFromTop (14).reduced (2, 0), "KEEP ON GENERATE", 1 });
+        locksBody.removeFromTop (2);
+        auto locks = locksBody.removeFromTop (26);
         for (int i = 0; i < 6; ++i)
             generatorPanel().fieldLock (static_cast<std::size_t> (i)).setBounds (locks.removeFromLeft (locks.getWidth() / 6).reduced (2));
-        auto locks2 = body.removeFromTop (26);
+        auto locks2 = locksBody.removeFromTop (26);
         for (int i = 6; i < 12; ++i)
             generatorPanel().fieldLock (static_cast<std::size_t> (i)).setBounds (locks2.removeFromLeft (locks2.getWidth() / 6).reduced (2));
         body.removeFromTop (4);
@@ -1526,10 +1570,16 @@ void FxPanel::resized()
         paintLabels_.push_back ({ actions.removeFromRight (actions.getWidth() - 396), u8("Creates editable Program data \u00b7 host automation unchanged"), 1 });
 
         auto previewBody = bodyOf (previewModule_);
-        previewSummaryBounds_ = previewBody.removeFromTop (52);
+        previewSummaryBounds_ = previewBody.removeFromTop (66);
+        paintLabels_.push_back ({ previewSummaryBounds_.removeFromTop (14).reduced (2, 0), "SELECTED PROGRAM", 1 });
         previewName_.setBounds (previewSummaryBounds_.removeFromTop (30));
         previewMeta_.setBounds (previewSummaryBounds_);
-        previewBody.removeFromTop (8);
+        previewBody.removeFromTop (10);
+        paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "EVENT PHASE", 1 });
+        const auto configured = processor_.durationParameter().get();
+        paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0),
+            juce::String (configured, 2) + " s configured", 1 });
+        previewBody.removeFromTop (6);
         paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "MODE / TRIGGER POLICY", 1 });
         playMode_.setBounds (previewBody.removeFromTop (28).reduced (2));
         previewBody.removeFromTop (4);
@@ -1539,10 +1589,13 @@ void FxPanel::resized()
         factory_.setBounds (previewBody.removeFromTop (30).reduced (2));
         previewBody.removeFromTop (4);
         comparison_.setBounds (previewBody.removeFromTop (30).reduced (2));
-        previewBody.removeFromTop (12);
+        previewBody.removeFromTop (10);
         auto previewActions = previewBody.removeFromBottom (34);
         audition_.setBounds (previewActions.removeFromLeft (140).reduced (2));
         stopAudition_.setBounds (previewActions.removeFromLeft (110).reduced (2));
+        // The event chart (real program trajectory) fills the remaining band.
+        eventChart_.setVisible (workspace_ == Workspace::perform);
+        eventChart_.setBounds (previewBody);
 
         auto macrosBody = bodyOf (macrosModule_);
         auto well = macrosBody.removeFromBottom (110).reduced (10, 8); // grouped well
@@ -1557,16 +1610,16 @@ void FxPanel::resized()
         programCurves_.setBounds (bodyOf (timelineModule_));
     }
     { auto area = band; // MOTION
-        auto routing = area.removeFromTop (82);
-        macroLabelBounds_ = routing.removeFromTop (14).reduced (4, 0);
-        auto macro = routing.removeFromTop (34);
+        motionModule_.setBounds (area);
+        auto body = bodyOf (motionModule_);
+        macroLabelBounds_ = body.removeFromTop (14).reduced (4, 0);
+        auto macro = body.removeFromTop (34);
         macroSelector_.setBounds (macro.removeFromLeft (74).reduced (2));
         macroDestination_.setBounds (macro.removeFromLeft (180).reduced (2));
         macroValue_.setBounds (macro.removeFromLeft (110).reduced (2));
         macroDepth_.setBounds (macro.reduced (2));
-        routing.removeFromTop (4);
-        motionModule_.setBounds (routing);
-        motionPanel_.setBounds (bodyOf (motionModule_));
+        body.removeFromTop (4);
+        motionPanel_.setBounds (body);
     }
     { auto area = band; // PROCESS
         flowModule_.setBounds (area.removeFromTop (64));
@@ -1596,24 +1649,39 @@ void FxPanel::resized()
     { auto area = band; // TRIGGER
         patternModule_.setBounds (area);
         auto body = bodyOf (patternModule_);
-        auto actions = body.removeFromTop (30);
-        patternActions_.setBounds (actions.removeFromLeft (110).reduced (2));
-        patternSelector_.setBounds (actions.removeFromLeft (240).reduced (2));
-        actions.removeFromLeft (8);
-        patternEnabled_.setBounds (actions.removeFromLeft (180).reduced (2));
-        patternStepSelector_.setBounds (actions.removeFromLeft (90).reduced (2));
-        auto details = body.removeFromTop (34);
+        auto selectsBody = body.removeFromTop (46);
+        auto selectsLabels = selectsBody.removeFromTop (14);
+        auto selects = selectsBody;
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (96).reduced (2, 0), "TRIGGER MODE", 5 });
+        patternActions_.setBounds (selects.removeFromLeft (96).reduced (2, 0));
+        selects.removeFromLeft (8);
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (150).reduced (2, 0), "TRIGGER PATTERN RATE", 5 });
+        patternSelector_.setBounds (selects.removeFromLeft (150).reduced (2, 0));
+        selects.removeFromLeft (8);
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (130).reduced (2, 0), "TRIGGER PATTERN BARS", 5 });
+        patternLength_.setBounds (selects.removeFromLeft (110).reduced (2, 0));
+        selects.removeFromLeft (8);
+        selectsLabels.removeFromLeft (110); // keep label strip in sync (no extra title)
+        patternBar_.setBounds (selects.removeFromLeft (100).reduced (2, 0));
+        selects.removeFromLeft (8);
+        patternPage_.setBounds (selects.removeFromLeft (100).reduced (2, 0));
+        selects.removeFromLeft (8);
+        patternEnabled_.setBounds (selects.removeFromLeft (170).reduced (2, 0));
+        // Step option strip (note/velocity/probability/ratchet) + grid row.
+        auto stepOpts = body.removeFromTop (30);
+        patternStepSelector_.setBounds (stepOpts.removeFromLeft (90).reduced (2));
+        stepOpts.removeFromLeft (8);
+        patternGrid_.setBounds (stepOpts.removeFromLeft (100).reduced (2));
+        stepOpts.removeFromLeft (8);
+        patternSwing_.setBounds (stepOpts.removeFromLeft (stepOpts.getWidth() * 40 / 100).reduced (2));
+        auto details = body.removeFromTop (30);
         const int detailWidth = details.getWidth() / 4;
         for (std::size_t i = 0; i < patternDetails_.size(); ++i) {
             auto slot = i == 3 ? details : details.removeFromLeft (detailWidth);
+            paintLabels_.push_back ({ slot.removeFromTop (12).reduced (2, 0),
+                std::array<juce::String,4> { "NOTE", "VELOCITY", "PROBABILITY", "RATCHET" }[i], 5 });
             patternDetails_[i].setBounds (slot.reduced (2));
         }
-        auto stepOpts = body.removeFromTop (34);
-        patternLength_.setBounds (stepOpts.removeFromLeft (110).reduced (2));
-        patternBar_.setBounds (stepOpts.removeFromLeft (100).reduced (2));
-        patternGrid_.setBounds (stepOpts.removeFromLeft (100).reduced (2));
-        patternPage_.setBounds (stepOpts.removeFromLeft (100).reduced (2));
-        patternSwing_.setBounds (stepOpts.reduced (2));
         auto stepRow = body.removeFromTop (54);
         const int stepWidth = stepRow.getWidth() / 16;
         for (std::size_t i = 0; i < patternSteps_.size(); ++i) {
@@ -1664,11 +1732,56 @@ void FxPanel::syncModuleLabels()
     const auto family = family_.getSelectedId() > 0
         ? family_.getItemText (family_.getSelectedId() - 1) : juce::String ("--");
     previewName_.setText (family, juce::dontSendNotification);
+    programName_.setText (family, juce::dontSendNotification);
     previewMeta_.setText (playMode_.getItemText (juce::jmax (0, playMode_.getSelectedId() - 1)) + " / " +
         triggerPolicy_.getItemText (juce::jmax (0, triggerPolicy_.getSelectedId() - 1)) +
         u8("  \u00b7  Live DSP event engine"), juce::dontSendNotification);
     flowTrack_.setVisible (workspace_ == Workspace::process);
 }
+void FxPanel::EventChart::paint (juce::Graphics& g)
+{
+    namespace c = vox::ui::tokens::colour;
+    const auto program = processor.program();
+    auto area = getLocalBounds();
+    auto phaseStrip = area.removeFromBottom (20).toFloat().reduced (0, 4);
+    const auto chart = area.toFloat().reduced (1);
+    // Grid: 5 vertical / 4 horizontal hairlines (reference event chart).
+    g.setColour (c::borderSubtle);
+    for (int i = 1; i < 5; ++i)
+        g.drawVerticalLine (static_cast<int> (chart.getX() + chart.getWidth() * i / 5.0f),
+                            chart.getY(), chart.getBottom());
+    for (int i = 1; i < 4; ++i)
+        g.drawHorizontalLine (static_cast<int> (chart.getY() + chart.getHeight() * i / 4.0f),
+                              chart.getX(), chart.getRight());
+    // Real program data: the program-wide amplitude trajectory.
+    juce::Path path;
+    constexpr int steps = 96;
+    for (int i = 0; i <= steps; ++i)
+    {
+        const float phase = i / static_cast<float> (steps);
+        const float value = juce::jlimit (0.0f, 1.0f, program.amplitudeCurve.evaluate (phase));
+        const float x = chart.getX() + phase * chart.getWidth();
+        const float y = chart.getBottom() - value * chart.getHeight();
+        if (i == 0) path.startNewSubPath (x, y); else path.lineTo (x, y);
+    }
+    g.setColour (c::themeAccent);
+    g.strokePath (path, juce::PathStrokeType (2.0f));
+    // Enabled layer spans as dim markers across the chart top.
+    g.setColour (c::themeAccentDim);
+    for (const auto& layer : program.layers)
+        if (layer.enabled)
+            g.drawHorizontalLine (static_cast<int> (chart.getY()) + 3,
+                chart.getX() + layer.timing.offset * chart.getWidth(),
+                chart.getX() + (layer.timing.offset + layer.timing.span) * chart.getWidth());
+    // Configured phase strip: equal segments, no fake fill.
+    g.setColour (c::border);
+    for (int i = 0; i < 24; ++i)
+    {
+        const auto segment = phaseStrip.removeFromLeft (phaseStrip.getWidth() / (24 - i));
+        g.fillRoundedRectangle (segment.reduced (1, 6), 2.0f);
+    }
+}
+
 void FxPanel::FlowTrack::paint (juce::Graphics& g)
 {
     namespace c = vox::ui::tokens::colour;
@@ -1718,6 +1831,7 @@ void FxPanel::setWorkspace (Workspace workspace)
 {
     if (static_cast<int> (workspace) < 0 || static_cast<int> (workspace) >= workspaceCount) return;
     workspace_ = workspace;
+    resized(); // relayout: per-workspace geometry, labels and wells are rebuilt
     applyWorkspaceVisibility();
     syncingTabs_ = true;
     workspaceTabs_.setSelectedIndex (static_cast<int> (workspace_));
@@ -1748,7 +1862,7 @@ void FxPanel::applyWorkspaceVisibility()
     for (auto& layer : layers_) show (*layer, design);
     for (auto& lock : layerLocks_) show (lock, design);
     show (sourceButton_, design);
-    show (programCurvesButton_, design);
+    show (programCurvesButton_, design); // Design entry point only; the tab strip owns TIMELINE
     show (programCurves_, timeline);
     // PERFORM: reference composition — Program Generator (category/style,
     // seed/length, recipe dials, locks, generate), Event Preview (program
@@ -1756,6 +1870,7 @@ void FxPanel::applyWorkspaceVisibility()
     show (generatorModule_, perform); show (previewModule_, perform);
     show (macrosModule_, perform);
     show (family_, perform);
+    show (sourcePanel_.rootSelector(), perform);
     show (generatorPanel().styleSelector(), perform);
     show (seed_, perform); show (duration_, perform); show (eventBars_, perform);
     show (generatorPanel().intensitySlider(), perform);

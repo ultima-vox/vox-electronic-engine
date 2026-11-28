@@ -32,9 +32,9 @@ public:
     void resized() override;
     juce::ComboBox& styleSelector() noexcept { return style_; }
     juce::ComboBox& complexitySelector() noexcept { return complexity_; }
-    juce::Slider& intensitySlider() noexcept { return intensity_; }
-    juce::Slider& energySlider() noexcept { return energy_; }
-    juce::Slider& stereoSlider() noexcept { return stereo_; }
+    vox::ui::VoxKnob& intensitySlider() noexcept { return intensity_; }
+    vox::ui::VoxKnob& energySlider() noexcept { return energy_; }
+    vox::ui::VoxKnob& stereoSlider() noexcept { return stereo_; }
     juce::ComboBox& lockLayerSelector() noexcept { return lockLayer_; }
     juce::Button& fieldLock(std::size_t index) noexcept { return fieldLocks_[index]; }
 private:
@@ -45,7 +45,10 @@ private:
     juce::ToggleButton lockGroup_{"Lock selected group"};
     juce::TextButton fullGenerate_{"Generate sound"},fullMutate_{"Mutate sound"};
     juce::Label graphStatus_;
-    juce::Slider intensity_,energy_,stereo_;
+    // Reference recipe dials (compact mint arcs, value chip below).
+    vox::ui::VoxKnob intensity_ { "INTENSITY", vox::ui::VoxKnob::Size::Small },
+        energy_ { "ENERGY", vox::ui::VoxKnob::Size::Small },
+        stereo_ { "STEREO MOTION", vox::ui::VoxKnob::Size::Small };
     std::array<juce::Label,6> labels_;
     juce::TextButton close_ { "Close" };
 };
@@ -435,6 +438,15 @@ private:
     // their parent, so a Label child sits over the module backdrop).
     std::array<juce::Label,16> moduleLabels_ {};
     juce::Label previewName_, previewMeta_;
+    juce::Label programEyebrow_, programName_;
+    // Event Preview chart: real program data (grid + program amplitude
+    // trajectory + configured phase strip), never a mock meter.
+    struct EventChart : juce::Component {
+        FxProcessor& processor;
+        explicit EventChart (FxProcessor& p) : processor (p) {}
+        void paint (juce::Graphics&) override;
+    };
+    EventChart eventChart_;
     struct FlowTrack : juce::Component {
         juce::String slots[4]; bool active[4] {};
         void paint (juce::Graphics& g) override;

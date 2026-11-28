@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <vector>
 #include "../Tokens.h"
 #include "../Typography.h"
 
@@ -20,6 +21,11 @@ public:
     {
         setInterceptsMouseClicks (false, true);
     }
+
+    // Grouped dial wells (fx.css .well) painted by the module backdrop; the
+    // editor declares them at layout time in module-local coordinates.
+    void clearWells() { wells_.clear(); }
+    void addWell (juce::Rectangle<int> localBounds) { wells_.push_back (localBounds); }
 
     void setBadge (juce::String text, Tone tone)
     {
@@ -60,6 +66,15 @@ public:
                                 t::radius::panel);
         g.setColour (c::border);
         g.drawRoundedRectangle (bounds.reduced (0.5f), t::radius::panel, 1.0f);
+
+        // Grouped wells: inset #151820 fields with soft borders (fx.css).
+        for (const auto& well : wells_)
+        {
+            g.setColour (c::wellGroup);
+            g.fillRoundedRectangle (well.toFloat(), 6.0f);
+            g.setColour (c::borderSubtle);
+            g.drawRoundedRectangle (well.toFloat().reduced (0.5f), 6.0f, 1.0f);
+        }
 
         // Header row: gradient #222630 -> #1e222a with bottom border.
         auto header = getLocalBounds().removeFromTop (t::size::moduleHeaderHeight).toFloat();
@@ -113,6 +128,7 @@ private:
 
     juce::String title_, badge_;
     Tone tone_ = Tone::neutral;
+    std::vector<juce::Rectangle<int>> wells_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoxModule)
 };

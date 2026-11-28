@@ -21,9 +21,9 @@ void drawSurface (juce::Graphics& g, juce::Rectangle<float> bounds, bool on,
     bounds = bounds.reduced (0.5f);
     if (on)
     {
-        g.setGradientFill (juce::ColourGradient (colour::accent.withAlpha (0.92f),
+        g.setGradientFill (juce::ColourGradient (colour::themeAccent.withAlpha (0.92f),
                                                  bounds.getX(), bounds.getY(),
-                                                 colour::accentDim,
+                                                 colour::themeAccentDim,
                                                  bounds.getX(), bounds.getBottom(), false));
     }
     else
@@ -39,10 +39,10 @@ void drawSurface (juce::Graphics& g, juce::Rectangle<float> bounds, bool on,
         g.setOpacity (0.35f);
     g.fillRoundedRectangle (bounds, radius::small);
     g.setOpacity (1.0f);
-    auto border = on ? colour::accentHover
-                     : (hover ? colour::accentDim : colour::border);
+    auto border = on ? colour::themeAccentHover
+                     : (hover ? colour::themeAccentDim : colour::border);
     if (focused)
-        border = colour::accent;
+        border = colour::themeAccent;
     g.setColour (withEnabled (border, enabled));
     g.drawRoundedRectangle (bounds, radius::small, focused ? 1.4f : 1.0f);
 }
@@ -71,38 +71,38 @@ VoxLookAndFeel::VoxLookAndFeel()
     setColour (juce::ResizableWindow::backgroundColourId, colour::background);
     setColour (juce::DocumentWindow::backgroundColourId, colour::background);
     setColour (juce::Label::textColourId, colour::text);
-    setColour (juce::Label::outlineWhenEditingColourId, colour::accent);
+    setColour (juce::Label::outlineWhenEditingColourId, colour::themeAccent);
     setColour (juce::ComboBox::textColourId, colour::text);
     setColour (juce::ComboBox::backgroundColourId, colour::control);
     setColour (juce::ComboBox::outlineColourId, colour::border);
     setColour (juce::ComboBox::arrowColourId, colour::textSecondary);
     setColour (juce::TextButton::buttonColourId, colour::control);
-    setColour (juce::TextButton::buttonOnColourId, colour::accent);
+    setColour (juce::TextButton::buttonOnColourId, colour::themeAccent);
     setColour (juce::TextButton::textColourOffId, colour::textSecondary);
     setColour (juce::TextButton::textColourOnId, colour::text);
     setColour (juce::ToggleButton::textColourId, colour::textSecondary);
-    setColour (juce::ToggleButton::tickColourId, colour::accent);
+    setColour (juce::ToggleButton::tickColourId, colour::themeAccent);
     setColour (juce::PopupMenu::backgroundColourId, colour::panel);
     setColour (juce::PopupMenu::textColourId, colour::textSecondary);
     setColour (juce::PopupMenu::headerTextColourId, colour::textSecondary);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, colour::accentDim);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, colour::themeAccentDim);
     setColour (juce::PopupMenu::highlightedTextColourId, colour::text);
     setColour (juce::Slider::textBoxTextColourId, colour::text);
     setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
     setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    setColour (juce::Slider::textBoxHighlightColourId, colour::accentDim);
-    setColour (juce::Slider::rotarySliderFillColourId, colour::accent);
+    setColour (juce::Slider::textBoxHighlightColourId, colour::themeAccentDim);
+    setColour (juce::Slider::rotarySliderFillColourId, colour::themeAccent);
     setColour (juce::Slider::rotarySliderOutlineColourId, colour::borderSubtle);
-    setColour (juce::Slider::trackColourId, colour::accent);
+    setColour (juce::Slider::trackColourId, colour::themeAccent);
     setColour (juce::Slider::backgroundColourId, colour::graph);
     setColour (juce::TextEditor::backgroundColourId, colour::control);
     setColour (juce::TextEditor::textColourId, colour::text);
-    setColour (juce::TextEditor::highlightColourId, colour::accentDim);
+    setColour (juce::TextEditor::highlightColourId, colour::themeAccentDim);
     setColour (juce::TextEditor::highlightedTextColourId, colour::text);
     setColour (juce::TextEditor::outlineColourId, colour::border);
-    setColour (juce::TextEditor::focusedOutlineColourId, colour::accent);
-    setColour (juce::CaretComponent::caretColourId, colour::accent);
-    setColour (juce::ScrollBar::thumbColourId, colour::accentDim);
+    setColour (juce::TextEditor::focusedOutlineColourId, colour::themeAccent);
+    setColour (juce::CaretComponent::caretColourId, colour::themeAccent);
+    setColour (juce::ScrollBar::thumbColourId, colour::themeAccentDim);
     setColour (juce::ScrollBar::trackColourId, colour::graph);
     setColour (juce::TooltipWindow::backgroundColourId, colour::panelRaised);
     setColour (juce::TooltipWindow::textColourId, colour::text);
@@ -116,9 +116,9 @@ VoxLookAndFeel::VoxLookAndFeel()
     getCurrentColourScheme().setUIColour (ColourScheme::menuBackground, colour::panel);
     getCurrentColourScheme().setUIColour (ColourScheme::outline, colour::border);
     getCurrentColourScheme().setUIColour (ColourScheme::defaultText, colour::text);
-    getCurrentColourScheme().setUIColour (ColourScheme::defaultFill, colour::accent);
+    getCurrentColourScheme().setUIColour (ColourScheme::defaultFill, colour::themeAccent);
     getCurrentColourScheme().setUIColour (ColourScheme::highlightedText, colour::text);
-    getCurrentColourScheme().setUIColour (ColourScheme::highlightedFill, colour::accentDim);
+    getCurrentColourScheme().setUIColour (ColourScheme::highlightedFill, colour::themeAccentDim);
     getCurrentColourScheme().setUIColour (ColourScheme::menuText, colour::textSecondary);
 }
 
@@ -174,7 +174,7 @@ void VoxLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int widt
         juce::Path value;
         value.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, juce::jmin (from, angle),
                              juce::jmax (from, angle), true);
-        const auto accent = enabled ? colour::accent : colour::textMuted;
+        const auto accent = enabled ? colour::themeAccent : colour::textMuted;
         g.setColour (accent.withAlpha (0.18f));
         g.strokePath (value, juce::PathStrokeType (stroke * 2.4f, juce::PathStrokeType::curved,
                                                    juce::PathStrokeType::rounded));
@@ -203,7 +203,7 @@ void VoxLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int widt
 
     if (slider.hasKeyboardFocus (false))
     {
-        g.setColour (colour::accent.withAlpha (0.6f));
+        g.setColour (colour::themeAccent.withAlpha (0.6f));
         g.drawEllipse (juce::Rectangle<float> (outer * 2.0f, outer * 2.0f).withCentre (c), 1.0f);
     }
 }
@@ -247,9 +247,9 @@ void VoxLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& bu
     {
         auto track = button.getLocalBounds().toFloat()
                          .withSizeKeepingCentre (26.0f, 14.0f);
-        g.setColour (withEnabled (on ? colour::accentDim : colour::graph, enabled));
+        g.setColour (withEnabled (on ? colour::themeAccentDim : colour::graph, enabled));
         g.fillRoundedRectangle (track, 7.0f);
-        g.setColour (withEnabled (on ? colour::accent : colour::border, enabled));
+        g.setColour (withEnabled (on ? colour::themeAccent : colour::border, enabled));
         g.drawRoundedRectangle (track, 7.0f, 1.0f);
         const auto knob = juce::Rectangle<float> (10.0f, 10.0f)
                               .withCentre ({ on ? track.getRight() - 7.0f : track.getX() + 7.0f,
@@ -260,13 +260,13 @@ void VoxLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& bu
     }
 
     auto bounds = button.getLocalBounds().toFloat().reduced (1.0f, 2.0f);
-    g.setColour (withEnabled (on ? colour::accent.withAlpha (0.22f) : colour::control, enabled));
+    g.setColour (withEnabled (on ? colour::themeAccent.withAlpha (0.22f) : colour::control, enabled));
     if (isButtonDown)
         g.setOpacity (0.8f);
     g.fillRoundedRectangle (bounds, radius::small);
-    auto border = on ? colour::accent : (isMouseOverButton ? colour::accentDim : colour::border);
+    auto border = on ? colour::themeAccent : (isMouseOverButton ? colour::themeAccentDim : colour::border);
     if (button.hasKeyboardFocus (true))
-        border = colour::accentHover;
+        border = colour::themeAccentHover;
     g.setColour (withEnabled (border, enabled));
     g.drawRoundedRectangle (bounds, radius::small, 1.0f);
     g.setColour (withEnabled (on ? colour::text : colour::textSecondary, enabled));
@@ -282,7 +282,7 @@ void VoxLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int widt
     const bool enabled = slider.isEnabled();
     const bool vertical = style == juce::Slider::LinearVertical
                        || style == juce::Slider::LinearBarVertical;
-    const auto accent = enabled ? colour::accent : colour::textMuted;
+    const auto accent = enabled ? colour::themeAccent : colour::textMuted;
     if (style == juce::Slider::LinearBar || style == juce::Slider::LinearBarVertical)
     {
         // Value fields (seed, counts) show only their number; bars show the
@@ -334,7 +334,7 @@ void VoxLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int widt
     const auto r = 5.5f;
     g.setColour (juce::Colour (0xff0a1520));
     g.fillEllipse (thumb.x - r, thumb.y - r, r * 2.0f, r * 2.0f);
-    g.setColour (slider.hasKeyboardFocus (false) ? colour::accentHover : accent);
+    g.setColour (slider.hasKeyboardFocus (false) ? colour::themeAccentHover : accent);
     g.drawEllipse (thumb.x - r, thumb.y - r, r * 2.0f, r * 2.0f, 1.5f);
     g.setColour (enabled ? colour::text : colour::textMuted);
     g.fillEllipse (thumb.x - 1.6f, thumb.y - 1.6f, 3.2f, 3.2f);
@@ -380,7 +380,7 @@ void VoxLookAndFeel::drawLabel (juce::Graphics& g, juce::Label& label)
         const auto field = label.getLocalBounds().toFloat().reduced (0.5f);
         g.setColour (colour::graph);
         g.fillRoundedRectangle (field, radius::small);
-        g.setColour (label.hasKeyboardFocus (true) ? colour::accentDim : colour::borderSubtle);
+        g.setColour (label.hasKeyboardFocus (true) ? colour::themeAccentDim : colour::borderSubtle);
         g.drawRoundedRectangle (field, radius::small, 1.0f);
         if (! label.isBeingEdited())
         {
@@ -417,7 +417,7 @@ void VoxLookAndFeel::fillTextEditorBackground (juce::Graphics& g, int width, int
 void VoxLookAndFeel::drawTextEditorOutline (juce::Graphics& g, int width, int height,
                                             juce::TextEditor& editor)
 {
-    g.setColour (editor.hasKeyboardFocus (true) ? colour::accent : colour::border);
+    g.setColour (editor.hasKeyboardFocus (true) ? colour::themeAccent : colour::border);
     g.drawRoundedRectangle (0.5f, 0.5f, static_cast<float> (width) - 1.0f,
                             static_cast<float> (height) - 1.0f, radius::small, 1.0f);
 }
@@ -451,9 +451,9 @@ void VoxLookAndFeel::drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle
     auto item = area.reduced (spacing::xs, 1);
     if (isHighlighted && isActive)
     {
-        g.setColour (colour::accent.withAlpha (0.16f));
+        g.setColour (colour::themeAccent.withAlpha (0.16f));
         g.fillRoundedRectangle (item.toFloat(), radius::small);
-        g.setColour (colour::accentDim);
+        g.setColour (colour::themeAccentDim);
         g.drawRoundedRectangle (item.toFloat().reduced (0.5f), radius::small, 1.0f);
     }
 
@@ -467,7 +467,7 @@ void VoxLookAndFeel::drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle
     }
     else if (isTicked)
     {
-        g.setColour (colour::accent);
+        g.setColour (colour::themeAccent);
         g.fillEllipse (left.toFloat().withSizeKeepingCentre (6.0f, 6.0f));
     }
 
@@ -508,8 +508,8 @@ void VoxLookAndFeel::drawScrollbar (juce::Graphics& g, juce::ScrollBar&, int x, 
                                   static_cast<float> (thumbSize))
         : juce::Rectangle<float> (static_cast<float> (thumbStart), track.getY(),
                                   static_cast<float> (thumbSize), track.getHeight());
-    g.setColour (isMouseDown ? colour::accent : (isMouseOver ? colour::accentDim.brighter (0.2f)
-                                                             : colour::accentDim));
+    g.setColour (isMouseDown ? colour::themeAccent : (isMouseOver ? colour::themeAccentDim.brighter (0.2f)
+                                                             : colour::themeAccentDim));
     g.fillRoundedRectangle (thumb.reduced (vertical ? 0.0f : 1.0f, vertical ? 1.0f : 0.0f), 3.0f);
 }
 
@@ -538,7 +538,7 @@ void VoxLookAndFeel::drawTooltip (juce::Graphics& g, const juce::String& text,
                                                 static_cast<float> (height));
     g.setColour (colour::panelRaised);
     g.fillRoundedRectangle (bounds, radius::small);
-    g.setColour (colour::accentDim);
+    g.setColour (colour::themeAccentDim);
     g.drawRoundedRectangle (bounds.reduced (0.5f), radius::small, 1.0f);
     juce::AttributedString s;
     s.append (text, typography::controlLabel(), colour::text);
@@ -553,7 +553,7 @@ void VoxLookAndFeel::drawAlertBox (juce::Graphics& g, juce::AlertWindow& alert,
 {
     const auto bounds = alert.getLocalBounds().toFloat();
     paint::panel (g, bounds, true);
-    g.setColour (colour::accent);
+    g.setColour (colour::themeAccent);
     g.fillRect (bounds.withHeight (2.0f).reduced (1.0f, 0.0f));
     layout.draw (g, textArea.toFloat());
 }
@@ -571,7 +571,7 @@ juce::Font VoxLookAndFeel::getAlertWindowMessageFont()
 void VoxLookAndFeel::drawCornerResizer (juce::Graphics& g, int w, int h, bool isMouseOver,
                                         bool isMouseDragging)
 {
-    g.setColour (isMouseOver || isMouseDragging ? colour::accent : colour::accentDim);
+    g.setColour (isMouseOver || isMouseDragging ? colour::themeAccent : colour::themeAccentDim);
     for (int i = 1; i <= 3; ++i)
     {
         const auto d = static_cast<float> (i) * 4.0f;

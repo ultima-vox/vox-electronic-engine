@@ -41,24 +41,24 @@ void VoxButton::paintButton (juce::Graphics& g, bool isMouseOverButton, bool isB
     switch (type)
     {
         case Type::Primary:
-            fill = tokens::colour::accent;
-            border = tokens::colour::accent;
+            fill = tokens::colour::themeAccent;
+            border = tokens::colour::themeAccent;
             text = tokens::colour::background;
             break;
         case Type::Secondary:
             if (isMouseOverButton)
-                border = tokens::colour::accentDim;
+                border = tokens::colour::themeAccentDim;
             break;
         case Type::Toggle:
             if (getToggleState())
             {
-                fill = tokens::colour::accent;
-                border = tokens::colour::accent;
+                fill = tokens::colour::themeAccent;
+                border = tokens::colour::themeAccent;
                 text = tokens::colour::background;
             }
             else if (isMouseOverButton)
             {
-                border = tokens::colour::accentDim;
+                border = tokens::colour::themeAccentDim;
             }
             break;
         case Type::Danger:
@@ -68,14 +68,14 @@ void VoxButton::paintButton (juce::Graphics& g, bool isMouseOverButton, bool isB
             break;
         case Type::Icon:
             fill = juce::Colours::transparentBlack;
-            border = isMouseOverButton ? tokens::colour::accentDim
+            border = isMouseOverButton ? tokens::colour::themeAccentDim
                                        : juce::Colours::transparentBlack;
             text = tokens::colour::textSecondary;
             break;
     }
 
     if (hasKeyboardFocus (true))
-        border = tokens::colour::accent;
+        border = tokens::colour::themeAccent;
     if (isButtonDown)
         fill = fill.darker (0.15f);
     if (! isEnabled())

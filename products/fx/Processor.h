@@ -234,6 +234,10 @@ public:
     std::uint64_t programRestoreEpoch() const noexcept { return programs_.programRevision(); }
     ProgramStore::VersionedProgram versionedProgram() const { return programs_.versionedProgram(); }
     bool editTonalityIfRevision(source::Tonality tonality,std::uint64_t revision) { return programs_.editTonalityIfRevision(tonality,revision); }
+    // Unconditional program-tonality edit for editors without a revision
+    // token (PERFORM pitch-key select); the versioned variant above stays
+    // for drag-guarded source edits.
+    bool editTonality(source::Tonality tonality) { return programs_.editTonality(tonality); }
     bool editCurveIfRevision(CurveTarget target, std::uint64_t revision, const timeline::Curve& curve) {
         return programs_.editCurveIfRevision(target, revision, curve);
     }

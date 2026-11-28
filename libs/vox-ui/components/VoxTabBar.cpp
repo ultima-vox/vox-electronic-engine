@@ -88,9 +88,9 @@ void VoxTabBar::paint (juce::Graphics& g)
         const auto hovered = i == hoverIndex && tab.enabled;
         auto bounds = boundsForIndex (i).toFloat().reduced (0.5f);
 
-        auto fill = active ? tokens::colour::accent : tokens::colour::control;
-        auto border = active ? tokens::colour::accent
-                             : (hovered ? tokens::colour::accentDim : tokens::colour::border);
+        auto fill = active ? tokens::colour::themeAccent : tokens::colour::control;
+        auto border = active ? tokens::colour::themeAccent
+                             : (hovered ? tokens::colour::themeAccentDim : tokens::colour::border);
         auto text = active ? tokens::colour::text
                            : (hovered ? tokens::colour::text : tokens::colour::textSecondary);
 
@@ -102,9 +102,9 @@ void VoxTabBar::paint (juce::Graphics& g)
         }
 
         if (active)
-            g.setGradientFill (juce::ColourGradient (tokens::colour::accent.withAlpha (0.95f),
+            g.setGradientFill (juce::ColourGradient (tokens::colour::themeAccent.withAlpha (0.95f),
                                                      bounds.getX(), bounds.getY(),
-                                                     tokens::colour::accentDim,
+                                                     tokens::colour::themeAccentDim,
                                                      bounds.getX(), bounds.getBottom(), false));
         else
             g.setGradientFill (juce::ColourGradient (tokens::colour::panelRaised, bounds.getX(),
@@ -124,7 +124,7 @@ void VoxTabBar::paint (juce::Graphics& g)
 
     if (hasKeyboardFocus (true))
     {
-        g.setColour (tokens::colour::accent);
+        g.setColour (tokens::colour::themeAccent);
         g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f),
                                 tokens::radius::small, 1.0f);
     }

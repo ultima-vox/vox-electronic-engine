@@ -46,6 +46,14 @@ void checkWorkspaceNonOverlap()
     for (int w = 0; w < vox::fx::FxPanel::workspaceCount; ++w)
     {
         panel.setWorkspace (static_cast<W> (w));
+        if (w == 5) {
+            int n = 0;
+            for (auto* child : panel.getChildren())
+                if (auto* l = dynamic_cast<juce::Label*> (child))
+                    if (l->isVisible() && l->getY() == 147)
+                        std::printf ("dbg147 [%d] '%s' x=%d w=%d\n", n++, l->getText().toRawUTF8(),
+                                     l->getX(), l->getWidth());
+        }
         const auto controls = visibleControls();
         // Containment is not overlap (module chrome hosts its controls);
         // partial intersections are.
@@ -61,9 +69,14 @@ void checkWorkspaceNonOverlap()
                     if (overlaps == 0) {
                         auto ci = static_cast<juce::Component*> (const_cast<void*> (controls[i].second));
                         auto cj = static_cast<juce::Component*> (const_cast<void*> (controls[j].second));
-                        std::printf ("overlap: [%s] '%s' x [%s] '%s'\n",
-                                     typeid (*ci).name(), ci->getTitle().toRawUTF8(),
-                                     typeid (*cj).name(), cj->getTitle().toRawUTF8());
+                        const auto* li = dynamic_cast<const juce::Label*> (ci);
+                        const auto* lj = dynamic_cast<const juce::Label*> (cj);
+                        const auto* li2 = dynamic_cast<const juce::Label*> (ci);
+                        std::printf ("overlap: y=%d h=%d text='%s' | y=%d h=%d text='%s' | visible i=%d j=%d w=%d/%d\n",
+                                     ci->getY(), ci->getHeight(), li != nullptr ? li->getText().toRawUTF8() : "",
+                                     cj->getY(), cj->getHeight(), lj != nullptr ? lj->getText().toRawUTF8() : "",
+                                     ci->isVisible(), cj->isVisible(),
+                                     ci->getWidth(), cj->getWidth());
                     }
                     ++overlaps;
                 }

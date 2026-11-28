@@ -38,6 +38,19 @@ inline const auto accentLine = juce::Colour (0xff517e7c);
 inline const auto onAccent = juce::Colour (0xff112627);
 inline const auto modulation = juce::Colour (0xffb3a7f4);
 } // namespace fx
+
+// Product-selected accent (the [data-theme] equivalent): the hosting plugin
+// selects its product variant once at startup and every shared component
+// paints through these references. Defaults to the product-neutral amber.
+inline juce::Colour themeAccent = accent;
+inline juce::Colour themeAccentHover = accentHover;
+inline juce::Colour themeAccentDim = accentDim;
+
+inline void selectFxTheme() noexcept {
+    themeAccent = fx::accent;
+    themeAccentHover = fx::accent; // mint family has no separate hover token
+    themeAccentDim = fx::accentLine;
+}
 namespace synth {
 inline const auto accent = juce::Colour (0xffc3a9f7);
 inline const auto onAccent = juce::Colour (0xff21192c);
