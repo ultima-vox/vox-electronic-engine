@@ -16,7 +16,7 @@
 
 namespace {
 struct Size { int width, height; };
-constexpr Size sizes[] { {1040,700}, {1280,720}, {1440,900}, {1600,1000} };
+constexpr Size sizes[] { {1040,700}, {1280,720}, {1440,900}, {1440,1080}, {1600,1000} };
 constexpr float dpiScales[] { 1.00f, 1.25f, 1.50f, 2.00f };
 constexpr int workspaceCount = vox::fx::FxPanel::workspaceCount;
 

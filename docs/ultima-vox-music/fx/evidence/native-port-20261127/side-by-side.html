@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VOX FX — reference vs native (TL 7240861728 side-by-side)</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #101218; color: #eef0f3;
+         font: 13px/1.5 ui-monospace, "IBM Plex Mono", monospace; }
+  header { padding: 14px 20px; border-bottom: 1px solid #313640; }
+  header h1 { font-size: 15px; margin: 0 0 4px; }
+  header p { margin: 0; color: #adb4c0; }
+  .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
+  .pane { border: 1px solid #313640; border-radius: 10px; background: #181b22; overflow: hidden; }
+  .pane > .bar { display: flex; align-items: center; gap: 10px;
+                 padding: 8px 12px; border-bottom: 1px solid #292e37;
+                 background: linear-gradient(160deg, #222630, #1e222a); }
+  .pane > .bar strong { font-weight: 650; }
+  .pane > .bar .hint { color: #929aa9; margin-left: auto; }
+  .frame { position: relative; width: 1440px; height: 1080px;
+           transform-origin: top left; }
+  .scale { overflow: auto; height: 1080px; }
+  .scale > * { zoom: 0.494; } /* fit 1440px into ~712px pane */
+  iframe { width: 1440px; height: 1080px; border: 0; display: block; background: #101218; }
+  img { width: 1440px; height: 1080px; display: block; background: #101218; }
+  nav { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 12px; }
+  nav button { font: inherit; color: #eef0f3; background: #22262f;
+               border: 1px solid #313640; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+  nav button.active { background: #f3bd72; border-color: #f3bd72; color: #112627; font-weight: 650; }
+  footer { padding: 8px 20px 20px; color: #929aa9; }
+</style>
+</head>
+<body>
+<header>
+  <h1>VOX FX — owner visual reference vs native port (1440×1080, both sides)</h1>
+  <p>Left: live reference prototype (PR #160 @ e420d2c0 composition, deployed Pages) —
+     use its zone tabs to match the workspace. Right: native JUCE editor render
+     (commit 3196611, fx_ui_render_harness, dpi 1.00). Reference: FX_VISUAL_REFERENCE_20261127.md.</p>
+</header>
+
+<nav id="tabs"></nav>
+
+<div class="panes">
+  <div class="pane">
+    <div class="bar"><strong>Reference — live Pages #fx</strong>
+      <span class="hint">zone tabs clickable inside the frame</span></div>
+    <div class="scale"><iframe id="ref" src="https://ultima-vox.github.io/vox-electronic-engine/#fx"></iframe></div>
+  </div>
+  <div class="pane">
+    <div class="bar"><strong>Native — VOX FX plugin editor</strong>
+      <span class="hint" id="native-label">DESIGN</span></div>
+    <div class="scale"><img id="native" src="ws0_1440x1080_dpi100.png" alt="native DESIGN workspace"></div>
+  </div>
+</div>
+
+<footer>
+  Persistent playable keyboard retained in every native workspace (owner request).
+  Evidence set: ws0 DESIGN · ws1 PERFORM · ws2 TIMELINE · ws3 MOTION · ws4 PROCESS ·
+  ws5 TRIGGER · ws6 PRESETS · ws7 ADVANCED — manifest.tsv has SHA-relevant render metadata.
+  Harness: tests/suite/FxUiRenderHarness.cpp (1440×1080 added for this gate).
+</footer>
+
+<script>
+  const workspaces = [
+    ['ws0', 'DESIGN'],   ['ws1', 'PERFORM'],  ['ws2', 'TIMELINE'], ['ws3', 'MOTION'],
+    ['ws4', 'PROCESS'],  ['ws5', 'TRIGGER'],  ['ws6', 'PRESETS'],  ['ws7', 'ADVANCED'],
+  ];
+  const nav = document.getElementById('tabs');
+  const img = document.getElementById('native');
+  const label = document.getElementById('native-label');
+  let active = null;
+  for (const [id, name] of workspaces) {
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.onclick = () => {
+      img.src = `${id}_1440x1080_dpi100.png`;
+      img.alt = `native ${name} workspace`;
+      label.textContent = name;
+      if (active) active.classList.remove('active');
+      active = b; b.classList.add('active');
+    };
+    nav.appendChild(b);
+    if (id === 'ws0') { active = b; b.classList.add('active'); }
+  }
+</script>
+</body>
+</html>
