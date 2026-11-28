@@ -2,70 +2,102 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>VOX FX — pinned reference (e420d2c0) vs native — 1440×900 @100%</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VOX FX — pinned reference (e420d2c0) vs native — side by side</title>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; background: #101218; color: #eef0f3;
          font: 13px/1.5 ui-monospace, "IBM Plex Mono", monospace; }
   header { padding: 14px 20px; border-bottom: 1px solid #313640; }
   header h1 { font-size: 15px; margin: 0 0 4px; }
-  header p { margin: 0; color: #adb4c0; max-width: 110ch; }
+  header p { margin: 0 0 6px; color: #adb4c0; max-width: 120ch; }
+  header code { color: #eef0f3; }
   nav { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 12px 0; }
   nav button { font: inherit; color: #eef0f3; background: #22262f;
                border: 1px solid #313640; border-radius: 6px; padding: 5px 14px; cursor: pointer; }
   nav button.active { background: #7ce2d0; border-color: #7ce2d0; color: #112627; font-weight: 650; }
-  .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
+  /* Responsive side-by-side: both captures at their real aspect, scaled to
+     the available pane width; panes stack on narrow screens. */
+  .panes { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+           gap: 12px; padding: 12px; }
   .pane { border: 1px solid #313640; border-radius: 10px; background: #181b22; overflow: hidden; }
   .pane > .bar { display: flex; align-items: center; gap: 10px;
                  padding: 8px 12px; border-bottom: 1px solid #292e37;
                  background: linear-gradient(160deg, #222630, #1e222a); }
   .pane > .bar strong { font-weight: 650; }
   .pane > .bar .hint { color: #929aa9; margin-left: auto; }
-  .viewport { width: 1440px; height: 900px; overflow: hidden; position: relative; }
-  .viewport img { width: 1440px; height: 900px; display: block; }
-  .fit { transform-origin: top left; transform: scale(0.4935); width: 1440px; }
-  .viewport.fitwrap { height: 900px; }
-  .viewport.fitwrap .fit { height: 900px; }
+  .viewport img { width: 100%; height: auto; display: block; }
+  details { padding: 0 20px 16px; }
+  summary { cursor: pointer; color: #adb4c0; }
+  li { margin: 4px 0; color: #adb4c0; }
   footer { padding: 8px 20px 20px; color: #929aa9; }
 </style>
 </head>
 <body>
 <header>
-  <h1>VOX FX — owner visual reference vs native port — identical viewport 1440×900, 100% scaling</h1>
-  <p>Reference (left): PR #160 FX prototype at commit <strong>e420d2c0</strong> — the deployed GitHub Pages
-     #fx route (deployment record: github-pages @ e420d2c0, success 2026-11-18), captured with a real
-     headless Chromium at 1440×900, deviceScaleFactor 1.0, zone tabs clicked in-page.</p>
-  <p>Native (right): VOX FX plugin editor rendered by <code>tests/suite/fx_ui_render_harness</code>
-     (commit 27bff1d), offscreen 1440×900 at dpi 1.00. Persistent playable keyboard retained in every
-     native workspace per owner request — it has no reference counterpart and is documented, not a deviation.</p>
+  <h1>VOX FX — owner visual reference vs native port — side-by-side captures</h1>
+  <p>Reference (left): PR #160 FX prototype at commit <strong>e420d2c0</strong>, captured as a
+     <strong>local pinned prototype capture</strong> — real headless Chromium 158, prototype sources of
+     e420d2c0 served locally, viewport 1440×900, deviceScaleFactor 1.0, zone tabs clicked in-page.
+     (github.io egress is blocked in the build sandbox; the pin is proven by the deployments API record:
+     github-pages @ e420d2c0, success 2026-11-18. This is not a capture of the live Pages site.)</p>
+  <p>Native (right): VOX FX plugin editor rendered by <code>tests/suite/fx_ui_render_harness --program</code>,
+     offscreen 1440×900 at dpi 1.00, all 8 workspaces, captured at the equivalent loaded-program state
+     (procedural seed 2026 — the same state the reference shows by default). Persistent playable keyboard
+     retained in every native workspace per owner request — documented native addition, not a deviation.</p>
 </header>
 <nav id="tabs"></nav>
 <div class="panes">
   <div class="pane">
-    <div class="bar"><strong>Reference — #fx @ e420d2c0</strong><span class="hint">1440×900 @ 100%</span></div>
-    <div class="viewport fitwrap"><div class="fit"><img id="ref" src="reference/ref_perform.png" alt="reference zone"></div></div>
+    <div class="bar"><strong>Reference — pinned e420d2c0 prototype</strong><span class="hint">1440×900 @ 100%</span></div>
+    <div class="viewport"><img id="ref" src="reference/ref_perform.png" alt="reference zone"></div>
   </div>
   <div class="pane">
     <div class="bar"><strong>Native — VOX FX plugin editor</strong><span class="hint" id="native-label">PERFORM</span></div>
-    <div class="viewport fitwrap"><div class="fit"><img id="native" src="native_ws1.png" alt="native workspace"></div></div>
+    <div class="viewport"><img id="native" src="native_perform.png" alt="native workspace"></div>
   </div>
 </div>
+<details>
+  <summary>Documented legitimate deviations (no invented reference features)</summary>
+  <ul>
+    <li><strong>Persistent playable keyboard</strong> docked at the bottom of every native workspace
+        (owner-mandated native addition; live stereo-peak meter and host clock likewise replace the
+        prototype's "DSP NOT CONNECTED" badge because native DSP runs; LIVE DSP badge replaces NO DSP).</li>
+    <li><strong>Layer dial set (DESIGN).</strong> The reference grid is Gain / Pan / Width / Pitch /
+        Cutoff / Offset / Duration. Native layers have no width parameter and no per-layer demo pitch /
+        cutoff value dials — pitch and cutoff are trajectories, edited through the 2×2 curve thumbnails
+        (Amp / Pitch / Cutoff / Pan) exactly as in the reference. The native grid maps real parameters:
+        Gain, Pan, Transpose (native per-layer semitone bias), Start (timing offset), Length (timing span),
+        Character (native signed family control). No Width dial was invented.</li>
+    <li><strong>Complexity is a segmented select</strong> ("1–4 layers"), not a continuous dial: the native
+        generator complexity is an integral layer count (reference shows a dial for its continuous value).</li>
+    <li><strong>Keep-on-generate chips</strong> are the native generator's 12 field locks (subset rows in
+        the reference card); the four native per-layer lock toggles live with the generator, not in DESIGN.</li>
+    <li><strong>Selected Program identity.</strong> Native Programs are procedural seeds without an authored
+        name field, so the header shows the honest identity "Seed 2026 · Noise Riser" instead of the
+        reference demo name "Cascade Rise".</li>
+    <li><strong>Tab order</strong> follows the reference (PERFORM first, then DESIGN); native tabs are
+        compact icon+text buttons with the reference selected state (accent text, accent-line border,
+        accent-soft fill).</li>
+    <li><strong>Sample reference input</strong> (reference Granular/Glitch cards, "Not linked" text field)
+        is native ADVANCED workspace functionality (Import / Built-in with SHA-256 verification), not a
+        per-card demo field.</li>
+  </ul>
+</details>
 <footer>
-  Known native-only differences (deliberate, owner-mandated): persistent playable keyboard docked at the
-  bottom of every workspace; live stereo-peak meter and host clock replace the prototype's "DSP NOT
-  CONNECTED" badge because native DSP runs; LIVE DSP badge replaces NO DSP. Functional modules match the
-  reference composition 1:1 elsewhere. Evidence set + capture manifest: this directory (manifest.tsv).
+  Evidence set + capture manifest: this directory (manifest.tsv, native_manifest.tsv). Reference captures
+  are local pinned prototype captures (see header). Both sides captured at 1440×900, 100% scaling.
 </footer>
 <script>
   const zones = [
-    ['ref_perform.png',  'native_ws1.png', 'PERFORM'],
-    ['ref_design.png',   'native_ws0.png', 'DESIGN'],
-    ['ref_timeline.png', 'native_ws2.png', 'TIMELINE'],
-    ['ref_motion.png',   'native_ws3.png', 'MOTION'],
-    ['ref_process.png',  'native_ws4.png', 'PROCESS'],
-    ['ref_trigger.png',  'native_ws5.png', 'TRIGGER'],
-    ['ref_presets.png',  'native_ws6.png', 'PRESETS'],
-    ['ref_advanced.png', 'native_ws7.png', 'ADVANCED'],
+    ['ref_perform.png',  'native_perform.png', 'PERFORM'],
+    ['ref_design.png',   'native_design.png',  'DESIGN'],
+    ['ref_timeline.png', 'native_ws2.png',     'TIMELINE'],
+    ['ref_motion.png',   'native_ws3.png',     'MOTION'],
+    ['ref_process.png',  'native_ws4.png',     'PROCESS'],
+    ['ref_trigger.png',  'native_ws5.png',     'TRIGGER'],
+    ['ref_presets.png',  'native_ws6.png',     'PRESETS'],
+    ['ref_advanced.png', 'native_ws7.png',     'ADVANCED'],
   ];
   const nav = document.getElementById('tabs');
   const ref = document.getElementById('ref');

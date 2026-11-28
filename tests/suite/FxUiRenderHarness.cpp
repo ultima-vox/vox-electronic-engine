@@ -41,6 +41,11 @@ bool writePng (const juce::Image& image, const juce::File& file)
 int main (int argc, char** argv)
 {
     const bool windowed = argc > 1 && std::string (argv[1]) == "--windowed";
+    // --program: capture an equivalent LOADED program state (reference
+    // default "Cascade Rise": riser family, seed 2026, 4 s duration) instead
+    // of the flat default curves. The seed program is loaded through the
+    // editor's real "Load seed program" control.
+    const bool program = argc > 1 && std::string (argv[1]) == "--program";
     const juce::File outDir = argc > 2
         ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[2])
         : juce::File::getCurrentWorkingDirectory().getChildFile ("ui-render");
@@ -48,6 +53,28 @@ int main (int argc, char** argv)
 
     vox::fx::FxProcessor processor;
     auto panel = std::make_unique<vox::fx::FxPanel> (processor);
+    if (program)
+    {
+        (void) processor.editGeneratorState ([] (auto& state) { state.seed = 2026; });
+        panel->factorySelector().setSelectedId (1, juce::sendNotificationSync);
+        // The harness does not pump the 25 Hz editor timer; sync the seed
+        // chip directly so the capture shows the loaded program state.
+        panel->seedSlider().setValue (processor.generatorState().seed, juce::dontSendNotification);
+    }
+    if (!windowed && !program)
+    {
+        panel->setSize (1440, 900);
+        panel->setWorkspace (vox::fx::FxPanel::Workspace::perform);
+        for (auto* child : panel->getChildren())
+            if (auto* l = dynamic_cast<juce::Label*> (child))
+                if (l->getY() < 60)
+                    std::printf ("LBL y=%d x=%d w=%d vis=%d text='%s'\n",
+                        l->getY(), l->getX(), l->getWidth(), (int) l->isVisible(),
+                        l->getText().toRawUTF8());
+        int n=0;
+        for (auto* child : panel->getChildren()) { (void) child; ++n; }
+        std::printf ("children=%d\n", n);
+    }
     std::FILE* manifest = std::fopen (
         outDir.getChildFile ("manifest.tsv").getFullPathName().toRawUTF8(), "w");
     std::fprintf (manifest, "workspace\twidth\theight\tdpi_scale\tfile\tbytes\n");

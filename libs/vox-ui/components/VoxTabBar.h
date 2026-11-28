@@ -13,6 +13,7 @@ public:
     {
         juce::String id;
         juce::String title;
+        juce::String icon; // optional short glyph drawn before the title
         bool enabled = true;
     };
 
@@ -32,6 +33,7 @@ public:
 
 private:
     std::vector<Tab> tabs;
+    std::vector<int> widths; // measured natural widths (reference ds-tabs)
     int selectedIndex = -1;
     int hoverIndex = -1;
     int pressedIndex = -1;

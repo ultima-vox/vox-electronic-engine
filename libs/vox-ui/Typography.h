@@ -40,6 +40,10 @@ inline juce::Font sectionTitle()    { return makeFont (sectionTitlePx, "SemiBold
 inline juce::Font moduleTitle()     { return makeFont (moduleTitlePx, "SemiBold"); }
 inline juce::Font controlLabel()    { return makeFont (controlLabelPx); }
 inline juce::Font valueText()       { return makeFont (valueTextPx); }
+// Reference .parameter-label: 10px, weight 550, secondary colour.
+inline juce::Font parameterLabel()  { return makeFont (10.0f, "SemiBold"); }
+// Reference .ds-tabs: 11px, weight 550.
+inline juce::Font tabText()         { return makeFont (11.0f, "SemiBold"); }
 
 // Monospaced UI text (eyebrows, badges, values) — the design language uses a
 // mono face for these roles; the port maps them to the default monospaced

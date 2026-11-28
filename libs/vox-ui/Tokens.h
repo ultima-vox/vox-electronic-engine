@@ -40,11 +40,26 @@ inline const auto modulation = juce::Colour (0xffb3a7f4);
 } // namespace fx
 
 // Product-selected accent (the [data-theme] equivalent): the hosting plugin
-// selects its product variant once at startup and every shared component
-// paints through these references. Defaults to the product-neutral amber.
-inline juce::Colour themeAccent = accent;
-inline juce::Colour themeAccentHover = accentHover;
-inline juce::Colour themeAccentDim = accentDim;
+// selects its product variant once at editor construction and every shared
+// component paints through these references. Defaults to the product-neutral
+// amber.
+//
+// Theme isolation (TL 7243048342): this trio is the ONLY mutable state in the
+// token set. The mutable state is compiled with hidden visibility so each
+// product module keeps a private copy — co-hosting VOX FX next to VOX Drums
+// or VOX Trance Synthesis can never interpose or mutate another module's
+// theme (each product links the vox_ui archive privately and each product
+// editor selects its own variant before painting). Components read the theme
+// only at paint time; product editors select before children are constructed.
+#if defined(__GNUC__) || defined(__clang__)
+#define VOX_HIDDEN [[gnu::visibility ("hidden")]]
+#else
+#define VOX_HIDDEN
+#endif
+VOX_HIDDEN inline juce::Colour themeAccent = accent;
+VOX_HIDDEN inline juce::Colour themeAccentHover = accentHover;
+VOX_HIDDEN inline juce::Colour themeAccentDim = accentDim;
+#undef VOX_HIDDEN
 
 inline void selectFxTheme() noexcept {
     themeAccent = fx::accent;

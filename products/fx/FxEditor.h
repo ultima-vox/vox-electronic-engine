@@ -41,7 +41,8 @@ private:
     void timerCallback() override;
     FxProcessor& processor_;
     juce::ComboBox style_,complexity_,lockLayer_,role_,graphLock_;
-    std::array<juce::ToggleButton,12> fieldLocks_;
+    // Reference .fx-locks: compact ds-button toggle chips, not checkboxes.
+    std::array<vox::ui::VoxButton,12> fieldLocks_;
     juce::ToggleButton lockGroup_{"Lock selected group"};
     juce::TextButton fullGenerate_{"Generate sound"},fullMutate_{"Mutate sound"};
     juce::Label graphStatus_;
@@ -98,7 +99,12 @@ private:
 class StructuralSlider final : public juce::Slider {
 public:
     std::function<void()> onStructuralChange;
+    // Optional display formatter (reference NumericValue unit suffix).
+    std::function<juce::String(double)> textFormatter;
     void valueChanged() override { if(onStructuralChange)onStructuralChange(); }
+    juce::String getTextFromValue(double value) override {
+        return textFormatter ? textFormatter(value) : juce::Slider::getTextFromValue(value);
+    }
 };
 
 class MotionPanel final : public juce::Component, private juce::ListBoxModel {
@@ -285,6 +291,11 @@ public:
     // existing open/close behaviour on top of the current workspace.
     enum class Workspace { design=0, perform, timeline, motion, process, trigger, presets, advanced, count };
     static constexpr int workspaceCount = static_cast<int>(Workspace::count);
+    // Reference tab order (PR #160): PERFORM, DESIGN, TIMELINE, ... Tab
+    // positions map onto the Workspace enum through this table.
+    static constexpr Workspace tabWorkspaces[workspaceCount] {
+        Workspace::perform, Workspace::design, Workspace::timeline, Workspace::motion,
+        Workspace::process, Workspace::trigger, Workspace::presets, Workspace::advanced };
     void setWorkspace (Workspace workspace);
     Workspace workspace() const noexcept { return workspace_; }
     vox::ui::VoxKeyboard& keyboard() noexcept { return keyboard_; }
@@ -292,7 +303,7 @@ public:
     // Eight visible, host-automatable macro knobs (TZ 13.2 PERFORM).
     vox::ui::VoxKnob& macroKnob(std::size_t index) noexcept { return macroKnobs_[index]; }
     juce::Slider& outputSlider() noexcept { return output_.getSlider(); }
-    juce::Slider& durationSlider() noexcept { return duration_.getSlider(); }
+    juce::Slider& durationSlider() noexcept { return duration_; }
     juce::ComboBox& comparisonSelector() noexcept { return comparison_; }
     juce::ComboBox& factorySelector() noexcept { return factory_; }
     juce::ComboBox& familySelector() noexcept { return family_; }
@@ -353,13 +364,15 @@ private:
     void finishPatternDrag();
     void refreshMacro();
     void refreshGenerator();
+    void openTimelineCurve (std::size_t layer, int kind);
     void refreshEffectSemantics(std::size_t);
     FxProcessor& processor_;
     SavePicker savePicker_;
     ExternalDrag externalDrag_;
     vox::ui::VoxKnob output_ { "OUTPUT", vox::ui::VoxKnob::Size::Large };
     juce::SliderParameterAttachment attachment_;
-    vox::ui::VoxKnob duration_ { "DURATION (S)", vox::ui::VoxKnob::Size::Large };
+    // Event duration: reference seed-row NumericValue chip (seconds), not a dial.
+    StructuralSlider duration_;
     juce::SliderParameterAttachment durationAttachment_;
     vox::ui::VoxComboBox family_,eventBars_,playMode_,triggerPolicy_,macroSelector_,macroDestination_,factory_,comparison_;
     juce::Label clockStatus_,fxTailStatus_;
@@ -368,7 +381,7 @@ private:
     vox::ui::VoxButton audition_ { "Preview event" }, stopAudition_ { "Clear events" };
     vox::ui::VoxButton panic_ { "PANIC" };
     juce::Slider seed_;
-    vox::ui::VoxButton generate_ { "Generate program" };
+    vox::ui::VoxButton generate_ { "Generate program", vox::ui::VoxButton::Type::Primary };
     vox::ui::VoxButton mutate_ { "Mutate" };
     juce::TextButton generatorSettings_ { "Settings" };
     std::unique_ptr<GeneratorPanel> generatorPanel_;

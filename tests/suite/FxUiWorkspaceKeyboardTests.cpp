@@ -46,14 +46,6 @@ void checkWorkspaceNonOverlap()
     for (int w = 0; w < vox::fx::FxPanel::workspaceCount; ++w)
     {
         panel.setWorkspace (static_cast<W> (w));
-        if (w == 5) {
-            int n = 0;
-            for (auto* child : panel.getChildren())
-                if (auto* l = dynamic_cast<juce::Label*> (child))
-                    if (l->isVisible() && l->getY() == 147)
-                        std::printf ("dbg147 [%d] '%s' x=%d w=%d\n", n++, l->getText().toRawUTF8(),
-                                     l->getX(), l->getWidth());
-        }
         const auto controls = visibleControls();
         // Containment is not overlap (module chrome hosts its controls);
         // partial intersections are.
@@ -98,6 +90,15 @@ void checkWorkspaceMatrix()
     panel.setSize (1040, 700);
 
     check (panel.workspace() == W::perform, "default workspace is PERFORM");
+    // Theme isolation: the FX editor selects the mint product theme before
+    // painting, and the mutable token state is module-private (hidden
+    // visibility), so co-hosted products keep their own theme.
+    check (vox::ui::tokens::colour::themeAccent == vox::ui::tokens::colour::fx::accent
+           && vox::ui::tokens::colour::themeAccentDim == vox::ui::tokens::colour::fx::accentLine,
+           "FX theme selected for the editor module");
+    { FxPanel second (processor); second.setSize (1040, 700);
+      check (vox::ui::tokens::colour::themeAccent == vox::ui::tokens::colour::fx::accent,
+             "repeated editor construction keeps the theme stable"); }
     check (!panel.layerPanel (0).isVisible(), "PERFORM hides layer cards");
     check (panel.macroKnob (0).isVisible() && panel.macroKnob (7).isVisible(),
            "PERFORM exposes all eight macro knobs");
@@ -108,7 +109,8 @@ void checkWorkspaceMatrix()
     check (panel.layerPanel (0).isVisible(), "DESIGN shows layer cards");
     check (!panel.programCurves().isVisible(), "DESIGN hides Program curves");
     panel.setWorkspace (W::perform);
-    check (panel.workspaceTabs().getSelectedIndex() == 1, "tab strip follows PERFORM");
+    // Reference tab order (PR #160): PERFORM is the first tab.
+    check (panel.workspaceTabs().getSelectedIndex() == 0, "tab strip follows PERFORM");
     check (panel.generateButton().isVisible(),
            "PERFORM exposes Generate");
 

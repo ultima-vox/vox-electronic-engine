@@ -75,7 +75,8 @@ GeneratorPanel::GeneratorPanel(FxProcessor& processor) : processor_(processor) {
     const char* lockNames[]{"Family","On","Time","Gain","Pan","Gain env","Pan env","Pitch env","Cutoff env","Filters","Transpose","Character"};
     const std::uint32_t bits[]{generator::family,generator::enabled,generator::timing,generator::gain,generator::pan,generator::gainCurve,generator::panCurve,generator::pitchCurve,generator::cutoffCurve,generator::filters,generator::transpose,generator::character};
     for(std::size_t i=0;i<fieldLocks_.size();++i){
-        auto& button=fieldLocks_[i];button.setButtonText(lockNames[i]);button.setTitle("Lock " + juce::String(lockNames[i]));
+        auto& button=fieldLocks_[i];button.setType(vox::ui::VoxButton::Type::Toggle);
+        button.setButtonText(lockNames[i]);button.setTitle("Lock " + juce::String(lockNames[i]));
         button.setTooltip("Preserve this field during Generate and Mutate");
         button.onClick=[this,i,bit=bits[i]]{const int layer=lockLayer_.getSelectedId()-1;if(layer<0||layer>=4)return;
             const bool locked=fieldLocks_[i].getToggleState();
@@ -960,14 +961,24 @@ void FxPanel::patternCommand(int id){
 }
 FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     : processor_ (processor),savePicker_(std::move(picker)),externalDrag_(std::move(drag)), attachment_ (processor.outputParameter(), output_.getSlider()),
-      durationAttachment_ (processor.durationParameter(), duration_.getSlider()), programCurves_(processor), sourcePanel_(processor), motionPanel_(processor), browser_(processor),
+      durationAttachment_ (processor.durationParameter(), duration_), programCurves_(processor), sourcePanel_(processor), motionPanel_(processor), browser_(processor),
       eventChart_ (processor)
 {
+    // Select the product theme FIRST: any construction-time or paint-time
+    // read of the shared tokens (including children added below) sees the
+    // FX variant, never the product-neutral default.
+    vox::ui::tokens::colour::selectFxTheme();
     addAndMakeVisible (output_);
     addAndMakeVisible (duration_);
-    duration_.setDoubleClickResetValue (4.0);
-    duration_.getSlider().setTitle ("Event duration in seconds");
-    duration_.getSlider().setDescription ("Duration applied to newly triggered events");
+    // Reference seed-row NumericValue: a compact seconds chip. The value
+    // stays the real host-automatable duration parameter.
+    duration_.setRange (0.05, 32.0, 0.05);
+    duration_.setSliderStyle (juce::Slider::LinearBar);
+    duration_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 26);
+    duration_.textFormatter = [] (double value) { return juce::String (value, 2) + " s"; };
+    duration_.setDoubleClickReturnValue (true, 4.0);
+    duration_.setTitle ("Event duration in seconds");
+    duration_.setDescription ("Duration applied to newly triggered events");
     output_.setDoubleClickResetValue (1.0);
     output_.getSlider().setTitle ("Output gain");
     output_.getSlider().setDescription ("Master output gain");
@@ -1131,6 +1142,11 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     addAndMakeVisible (generate_); addAndMakeVisible (mutate_);
     generatorSettings_.setTitle("Generator settings");generatorSettings_.setTooltip("Adjust generator shaping and per-field layer locks");
     generatorPanel_=std::make_unique<GeneratorPanel>(processor_);addChildComponent(*generatorPanel_);
+    // Reference recipe dial size (60px) for the generator recipe knobs.
+    generatorPanel().intensitySlider().setCustomDiameter (60);
+    generatorPanel().energySlider().setCustomDiameter (60);
+    generatorPanel().stereoSlider().setCustomDiameter (60);
+    for (auto& knob : macroKnobs_) knob.setCustomDiameter (60);
     generatorSettings_.onClick=[this]{generatorPanel_->setVisible(true);generatorPanel_->toFront(true);};
     addAndMakeVisible(generatorSettings_);
     for (int i=0; i<4; ++i) {
@@ -1140,6 +1156,11 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         layers_[layerIndex]->onEditSource=[this,layerIndex]{
             sourcePanel_.layerSelector().setSelectedId(static_cast<int>(layerIndex)+1,juce::sendNotificationSync);
             sourcePanel_.open(*this);
+        };
+        // Reference 2x2 curve directory: a thumbnail opens the timeline on
+        // that layer's trajectory (openTimeline(i*4+n)).
+        layers_[layerIndex]->onOpenTimeline=[this,layerIndex](int kind){
+            openTimelineCurve(layerIndex,kind);
         };
     }
     addChildComponent(programCurves_);
@@ -1277,11 +1298,15 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     bindPatternDrag(patternSwing_);for(auto& control:patternDetails_)bindPatternDrag(control);
     refreshPattern();
     // Workspace shell: tab strip, section header, persistent keyboard.
+    // Reference tab order (PR #160): PERFORM first, then DESIGN. Tab
+    // positions map onto the Workspace enum through tabWorkspaces. Glyph
+    // keywords draw as compact vector icons (reference lucide icons).
     workspaceTabs_.setTabs({
-        {"design","DESIGN"},{"perform","PERFORM"},{"timeline","TIMELINE"},{"motion","MOTION"},
-        {"process","PROCESS"},{"trigger","TRIGGER"},{"presets","PRESETS"},{"advanced","ADVANCED"}});
+        {"perform","PERFORM","sliders"},{"design","DESIGN","layers"},{"timeline","TIMELINE","wave"},{"motion","MOTION","wave"},
+        {"process","PROCESS","arrow"},{"trigger","TRIGGER","grid"},{"presets","PRESETS","star"},{"advanced","ADVANCED","warning"}});
     workspaceTabs_.onTabChanged=[this](int index){
-        if(!syncingTabs_&&index>=0&&index<workspaceCount)setWorkspace(static_cast<Workspace>(index));};
+        if(!syncingTabs_&&index>=0&&index<workspaceCount)
+            setWorkspace (tabWorkspaces[static_cast<std::size_t>(index)]);};
     addAndMakeVisible(workspaceTabs_);
     addAndMakeVisible(workspaceHeader_);
     // UI keyboard -> bounded processor queue (channel uiNoteChannel); the
@@ -1306,6 +1331,19 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
         // not an opaque sibling on top of them.
         module->toBack();
     }
+    // Reference panel-header icons (lucide equivalents, vector-drawn).
+    generatorModule_.setIcon (vox::ui::VoxModule::Icon::sliders);
+    previewModule_.setIcon (vox::ui::VoxModule::Icon::preview);
+    macrosModule_.setIcon (vox::ui::VoxModule::Icon::grid);
+    designModule_.setIcon (vox::ui::VoxModule::Icon::layers);
+    timelineModule_.setIcon (vox::ui::VoxModule::Icon::wave);
+    motionModule_.setIcon (vox::ui::VoxModule::Icon::flow);
+    flowModule_.setIcon (vox::ui::VoxModule::Icon::flow);
+    slotsModule_.setIcon (vox::ui::VoxModule::Icon::sliders);
+    outputModule_.setIcon (vox::ui::VoxModule::Icon::output);
+    patternModule_.setIcon (vox::ui::VoxModule::Icon::pattern);
+    presetsModule_.setIcon (vox::ui::VoxModule::Icon::star);
+    advancedModule_.setIcon (vox::ui::VoxModule::Icon::warning);
     for (auto& label : moduleLabels_) {
         label.setJustificationType(juce::Justification::centredLeft);
         label.setColour(juce::Label::textColourId, vox::ui::tokens::colour::textSecondary);
@@ -1330,15 +1368,13 @@ FxPanel::FxPanel (FxProcessor& processor,SavePicker picker,ExternalDrag drag)
     programEyebrow_.setJustificationType(juce::Justification::centredRight);
     programName_.setFont(vox::ui::typography::sectionTitle());
     programName_.setJustificationType(juce::Justification::centredRight);
+    programName_.setColour(juce::Label::textColourId, vox::ui::tokens::colour::text);
     for (auto* label : { &programEyebrow_, &programName_ }) {
         label->setInterceptsMouseClicks(false,false);
         addAndMakeVisible(*label);
     }
     eventChart_.setInterceptsMouseClicks(false,false);
     addChildComponent(eventChart_);
-    // The FX product selects the mint FX accent (reference [data-theme=fx]);
-    // every shared component paints through the theme references.
-    vox::ui::tokens::colour::selectFxTheme();
     keyboard_.setAccent (vox::ui::tokens::colour::fx::accent);
     // Recipe controls re-parented into the PERFORM Program-Generator module.
     generatorPanel().styleSelector().setSelectedId (processor_.generatorState().style + 1, juce::dontSendNotification);
@@ -1467,7 +1503,7 @@ void FxPanel::resized()
     meterBounds_ = top.removeFromRight (250).reduced (2);
     top.removeFromRight (10);
     // Reference header right side: PROGRAM eyebrow + strong program name.
-    auto programArea = top.removeFromRight (200);
+    auto programArea = top.removeFromRight (240);
     programEyebrow_.setBounds (programArea.removeFromTop (14));
     programName_.setBounds (programArea);
     // Chrome row 2: zone tabs (reference fx-nav) span the content width.
@@ -1489,13 +1525,10 @@ void FxPanel::resized()
         return body;
     };
     const auto band = central;
-    { auto area = band; // DESIGN
+    { auto area = band; // DESIGN — four reference layer cards
         auto row = area.removeFromTop (30);
-        sourceButton_.setBounds (row.removeFromLeft (150).reduced (2));
-        programCurvesButton_.setBounds (row.removeFromLeft (180).reduced (2));
-        auto locks = area.removeFromTop (28);
-        for (std::size_t i = 0; i < layerLocks_.size(); ++i)
-            layerLocks_[i].setBounds (locks.removeFromLeft (110).reduced (2));
+        sourceButton_.setBounds (row.removeFromLeft (132).reduced (2));
+        programCurvesButton_.setBounds (row.removeFromLeft (150).reduced (2));
         area.removeFromTop (4);
         designModule_.setBounds (area);
         auto body = bodyOf (designModule_);
@@ -1506,52 +1539,61 @@ void FxPanel::resized()
         }
     }
     { auto area = band; // PERFORM — Program Generator | Event Preview; Macros below
-        auto columns = area.removeFromTop (std::max (0, area.getHeight() - 152));
+        auto columns = area.removeFromTop (std::max (0, area.getHeight() - 182));
         // Both modules fill their column: dense two-column grid per the
-        // reference (no vast empty lower workspace).
+        // reference (no vast empty lower workspace); the macro well is sized
+        // so its eight 60px dials render at full reference geometry.
         auto generatorCol = columns.removeFromLeft (columns.getWidth() * 55 / 100);
         columns.removeFromLeft (10);
         previewModule_.setBounds (columns);
         generatorModule_.setBounds (generatorCol);
-        macrosModule_.setBounds (area.removeFromBottom (132).removeFromTop (132 - 10));
+        macrosModule_.setBounds (area.removeFromBottom (172));
 
         auto body = bodyOf (generatorModule_);
         auto selectsBody = body.removeFromTop (46);
         auto selectsLabels = selectsBody.removeFromTop (14);
-        const auto selectWidth = selectsBody.getWidth() / 3;
-        for (int i = 0; i < 3; ++i)
-            paintLabels_.push_back ({ selectsLabels.removeFromLeft (selectWidth).reduced (2, 0),
-                std::array<juce::String,3> { "CATEGORY", "STYLE", "PITCH KEY" }[static_cast<std::size_t>(i)], 1 });
-        family_.setBounds (selectsBody.removeFromLeft (selectWidth).reduced (2, 0));
-        generatorPanel().styleSelector().setBounds (selectsBody.removeFromLeft (selectWidth).reduced (2, 0));
+        // Reference generator-fields grid: 1.1fr / 1fr / .63fr columns.
+        const auto categoryWidth = selectsBody.getWidth() * 39 / 100;
+        const auto styleWidth = selectsBody.getWidth() * 35 / 100;
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (categoryWidth).reduced (2, 0), "CATEGORY", 1 });
+        paintLabels_.push_back ({ selectsLabels.removeFromLeft (styleWidth).reduced (2, 0), "STYLE", 1 });
+        paintLabels_.push_back ({ selectsLabels, "PITCH KEY", 1 });
+        family_.setBounds (selectsBody.removeFromLeft (categoryWidth).reduced (2, 0));
+        generatorPanel().styleSelector().setBounds (selectsBody.removeFromLeft (styleWidth).reduced (2, 0));
         sourcePanel_.rootSelector().setBounds (selectsBody.reduced (2, 0));
-        body.removeFromTop (6);
-        auto seedRow = body.removeFromTop (48); // 14 label strip + 32 controls + 2 pad
-        const auto seedLabels = seedRow.removeFromTop (14);
-        auto seedControls = seedRow;
-        auto seedArea = seedControls.removeFromLeft (seedControls.getWidth() * 44 / 100);
-        paintLabels_.push_back ({ seedArea.removeFromLeft (46), "SEED", 1 });
-        seed_.setBounds (seedArea.removeFromBottom (30).reduced (1, 3));
-        seedControls.removeFromLeft (8);
-        auto lengthArea = seedControls.removeFromLeft (seedControls.getWidth() * 40 / 100);
-        paintLabels_.push_back ({ lengthArea.removeFromLeft (62), "LENGTH", 1 });
-        eventBars_.setBounds (lengthArea.removeFromBottom (30).reduced (1, 3));
-        duration_.setBounds (seedControls.removeFromRight (104).removeFromBottom (34).reduced (0, 0));
-        body.removeFromTop (6);
-        auto recipes = body.removeFromTop (std::max (96, body.getHeight() - (4 + 14 + 2 + 26 + 26 + 4 + 34 + 18)));
-        generatorModule_.addWell (recipes.translated (-generatorModule_.getX(), -generatorModule_.getY())
-                                              .reduced (0, 2));
+        body.removeFromTop (8);
+        // Seed strip: chip-sized seed, bars segmented select and seconds chip
+        // (reference Seed / Length row; native keeps the real bars parameter).
+        auto seedRow = body.removeFromTop (30);
+        paintLabels_.push_back ({ seedRow.removeFromLeft (38).reduced (2, 0), "SEED", 1 });
+        seed_.setBounds (seedRow.removeFromLeft (150).reduced (0, 1));
+        seedRow.removeFromLeft (10);
+        paintLabels_.push_back ({ seedRow.removeFromLeft (52).reduced (2, 0), "LENGTH", 1 });
+        eventBars_.setBounds (seedRow.removeFromLeft (110).reduced (2, 2));
+        seedRow.removeFromLeft (10);
+        paintLabels_.push_back ({ seedRow.removeFromLeft (72).reduced (2, 0), "DURATION (S)", 1 });
+        duration_.setBounds (seedRow.reduced (0, 1));
+        body.removeFromTop (12);
+        // Recipe dial well (.fx-recipe-dials): four full-size dials.
+        // Complexity is a real 1..4 layer count, so it stays a compact
+        // segmented-style select (documented deviation from the dial).
+        auto recipes = body.removeFromTop (150);
+        generatorModule_.addWell (recipes.translated (-generatorModule_.getX(), -generatorModule_.getY()));
         const auto recipeWidth = recipes.getWidth() / 4;
         for (int i = 0; i < 4; ++i) {
             auto slot = i == 3 ? recipes : recipes.removeFromLeft (recipeWidth);
-            if (i == 1) paintLabels_.push_back ({ slot.removeFromTop (14).reduced (2, 0), "COMPLEXITY", 1 });
-            else slot.removeFromTop (14); // VoxKnob paints its own dial label
-            if (i == 1) generatorPanel().complexitySelector().setBounds (slot.removeFromTop (34).reduced (10, 3));
-            else if (i == 0) generatorPanel().intensitySlider().setBounds (slot.removeFromTop (70).reduced (14, 0));
-            else if (i == 2) generatorPanel().energySlider().setBounds (slot.removeFromTop (70).reduced (14, 0));
-            else generatorPanel().stereoSlider().setBounds (slot.removeFromTop (70).reduced (14, 0));
+            if (i == 1) {
+                paintLabels_.push_back ({ slot.removeFromTop (14).reduced (2, 0), "LAYERS", 1 });
+                slot.removeFromTop (2);
+                generatorPanel().complexitySelector().setBounds (slot.removeFromTop (30).reduced (14, 0));
+            } else {
+                auto& dial = i == 0 ? generatorPanel().intensitySlider()
+                           : i == 2 ? generatorPanel().energySlider()
+                                    : generatorPanel().stereoSlider();
+                dial.setBounds (slot);
+            }
         }
-        body.removeFromTop (4);
+        body.removeFromTop (12);
         auto locksBody = body.removeFromTop (14 + 2 + 26 + 26);
         paintLabels_.push_back ({ locksBody.removeFromTop (14).reduced (2, 0), "KEEP ON GENERATE", 1 });
         locksBody.removeFromTop (2);
@@ -1561,34 +1603,33 @@ void FxPanel::resized()
         auto locks2 = locksBody.removeFromTop (26);
         for (int i = 6; i < 12; ++i)
             generatorPanel().fieldLock (static_cast<std::size_t> (i)).setBounds (locks2.removeFromLeft (locks2.getWidth() / 6).reduced (2));
-        body.removeFromTop (4);
-        auto actions = body.removeFromTop (34);
-        generate_.setBounds (actions.removeFromLeft (160).reduced (2));
+        auto actions = body.removeFromBottom (34);
+        generate_.setBounds (actions.removeFromLeft (168).reduced (2));
         mutate_.setBounds (actions.removeFromLeft (120).reduced (2));
         actions.removeFromLeft (6);
         generatorSettings_.setBounds (actions.removeFromLeft (110).reduced (2));
-        paintLabels_.push_back ({ actions.removeFromRight (actions.getWidth() - 396), u8("Creates editable Program data \u00b7 host automation unchanged"), 1 });
+        paintLabels_.push_back ({ actions.removeFromRight (actions.getWidth() - 410), u8("Creates editable Program data \u00b7 host automation unchanged"), 1 });
 
         auto previewBody = bodyOf (previewModule_);
         previewSummaryBounds_ = previewBody.removeFromTop (66);
         paintLabels_.push_back ({ previewSummaryBounds_.removeFromTop (14).reduced (2, 0), "SELECTED PROGRAM", 1 });
         previewName_.setBounds (previewSummaryBounds_.removeFromTop (30));
         previewMeta_.setBounds (previewSummaryBounds_);
-        previewBody.removeFromTop (10);
+        previewBody.removeFromTop (8);
         paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "EVENT PHASE", 1 });
         const auto configured = processor_.durationParameter().get();
         paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0),
             juce::String (configured, 2) + " s configured", 1 });
         previewBody.removeFromTop (6);
         paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "MODE / TRIGGER POLICY", 1 });
-        playMode_.setBounds (previewBody.removeFromTop (28).reduced (2));
+        playMode_.setBounds (previewBody.removeFromTop (26).reduced (2));
         previewBody.removeFromTop (4);
-        triggerPolicy_.setBounds (previewBody.removeFromTop (28).reduced (2));
+        triggerPolicy_.setBounds (previewBody.removeFromTop (26).reduced (2));
         previewBody.removeFromTop (8);
         paintLabels_.push_back ({ previewBody.removeFromTop (14).reduced (2, 0), "LOAD SEED PROGRAM / COMPARE", 1 });
-        factory_.setBounds (previewBody.removeFromTop (30).reduced (2));
+        factory_.setBounds (previewBody.removeFromTop (26).reduced (2));
         previewBody.removeFromTop (4);
-        comparison_.setBounds (previewBody.removeFromTop (30).reduced (2));
+        comparison_.setBounds (previewBody.removeFromTop (26).reduced (2));
         previewBody.removeFromTop (10);
         auto previewActions = previewBody.removeFromBottom (34);
         audition_.setBounds (previewActions.removeFromLeft (140).reduced (2));
@@ -1598,7 +1639,8 @@ void FxPanel::resized()
         eventChart_.setBounds (previewBody);
 
         auto macrosBody = bodyOf (macrosModule_);
-        auto well = macrosBody.removeFromBottom (110).reduced (10, 8); // grouped well
+        macrosModule_.addWell (macrosBody);
+        auto well = macrosBody.reduced (10, 8); // grouped macro well padding
         const int knobWidth = well.getWidth() / static_cast<int> (macroKnobs_.size());
         for (std::size_t i = 0; i < macroKnobs_.size(); ++i) {
             auto slot = i + 1 == macroKnobs_.size() ? well : well.removeFromLeft (knobWidth);
@@ -1731,8 +1773,12 @@ void FxPanel::syncModuleLabels()
     previewMeta_.setVisible (workspace_ == Workspace::perform);
     const auto family = family_.getSelectedId() > 0
         ? family_.getItemText (family_.getSelectedId() - 1) : juce::String ("--");
-    previewName_.setText (family, juce::dontSendNotification);
-    programName_.setText (family, juce::dontSendNotification);
+    // Native Programs are procedural seeds (no authored name field); the
+    // Selected Program header shows the honest seed identity.
+    const auto seedIdentity = u8("Seed ") + juce::String (processor_.generatorState().seed)
+        + u8(" \u00b7 ") + family;
+    previewName_.setText (seedIdentity, juce::dontSendNotification);
+    programName_.setText (seedIdentity, juce::dontSendNotification);
     previewMeta_.setText (playMode_.getItemText (juce::jmax (0, playMode_.getSelectedId() - 1)) + " / " +
         triggerPolicy_.getItemText (juce::jmax (0, triggerPolicy_.getSelectedId() - 1)) +
         u8("  \u00b7  Live DSP event engine"), juce::dontSendNotification);
@@ -1827,6 +1873,14 @@ juce::String workspaceTitle (FxPanel::Workspace workspace)
     return "";
 }
 } // namespace
+void FxPanel::openTimelineCurve (std::size_t layer, int kind)
+{
+    if (layer >= layers_.size() || kind < 0 || kind > 3) return;
+    setWorkspace (Workspace::timeline);
+    // Scope = Layer A..D (ids 2..5), kind = Amplitude/Pitch/Cutoff/Panorama.
+    programCurves_.scopeSelector().setSelectedId (static_cast<int> (layer) + 2, juce::sendNotificationSync);
+    programCurves_.selector().setSelectedId (kind + 1, juce::sendNotificationSync);
+}
 void FxPanel::setWorkspace (Workspace workspace)
 {
     if (static_cast<int> (workspace) < 0 || static_cast<int> (workspace) >= workspaceCount) return;
@@ -1834,7 +1888,10 @@ void FxPanel::setWorkspace (Workspace workspace)
     resized(); // relayout: per-workspace geometry, labels and wells are rebuilt
     applyWorkspaceVisibility();
     syncingTabs_ = true;
-    workspaceTabs_.setSelectedIndex (static_cast<int> (workspace_));
+    const int tabPosition = workspace == Workspace::design ? 1
+                          : workspace == Workspace::perform ? 0
+                          : static_cast<int> (workspace);
+    workspaceTabs_.setSelectedIndex (tabPosition);
     syncingTabs_ = false;
     const bool timeline = workspace_ == Workspace::timeline;
     programCurvesButton_.setToggleState (timeline, juce::dontSendNotification);
@@ -1858,9 +1915,9 @@ void FxPanel::applyWorkspaceVisibility()
     const bool trigger = workspace_ == Workspace::trigger;
     const bool presets = workspace_ == Workspace::presets;
     const bool advanced = workspace_ == Workspace::advanced;
-    // DESIGN: four layer cards, locks, source and curves entry points.
+    // DESIGN: four layer cards, source and curves entry points. Generator
+    // layer locks live in the generator panel (not laid out in DESIGN).
     for (auto& layer : layers_) show (*layer, design);
-    for (auto& lock : layerLocks_) show (lock, design);
     show (sourceButton_, design);
     show (programCurvesButton_, design); // Design entry point only; the tab strip owns TIMELINE
     show (programCurves_, timeline);
@@ -1922,6 +1979,8 @@ void FxPanel::applyWorkspaceVisibility()
     // Always visible: chrome, keyboard, panic, clock and overlays themselves.
     show (workspaceTabs_, true);
     show (workspaceHeader_, false); // identity is painted in the chrome row
+    show (programEyebrow_, true);
+    show (programName_, true);
     show (panic_, true);
     show (clockStatus_, true);
     show (keyboard_, true);
@@ -2236,7 +2295,8 @@ void FxPanel::timerCallback()
     if (workspace_ == Workspace::perform) {
         const auto family = family_.getSelectedId() > 0
             ? family_.getItemText (family_.getSelectedId() - 1) : juce::String ("--");
-        previewName_.setText (family, juce::dontSendNotification);
+        previewName_.setText (u8("Seed ") + juce::String (processor_.generatorState().seed)
+            + u8(" \u00b7 ") + family, juce::dontSendNotification);
         previewMeta_.setText (playMode_.getItemText (juce::jmax (0, playMode_.getSelectedId() - 1)) + " / " +
             triggerPolicy_.getItemText (juce::jmax (0, triggerPolicy_.getSelectedId() - 1)) +
             u8("  \u00b7  Live DSP event engine"), juce::dontSendNotification);
